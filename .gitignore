@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE / Editor
+.vscode/
+
+# Project generated
+run_logs/
+plot_data/
+trace_data/stitched/
+
+# AI Agent
+.sisyphus/
+
+# Dataset (大规模二进制数据，不适合 Git)
+dataset/proxy_*/
+dataset/coco_annotations.json
+dataset/batch_summary.json
+dataset/auto_collect_config.json
+
+# Trajectory raw data (太大，只保留 test_data 目录作为测试 fixture)
+trace_data/track24.7.25-24.8.5_79_6lu/*.txt
+!trace_data/track24.7.25-24.8.5_79_6lu/*.md
+trace_data/track24.7.25-24.8.5_79_6lu/**/*.png
+trace_data/track24.7.25-24.8.5_79_6lu/plots/
+trace_data/track24.7.25-24.8.5_79_6lu/stitched_data/
+trace_data/archive/
+
+# Website
+website/node_modules/
+website/.vitepress/dist/
+website/.vitepress/cache/
+
+# OS
+Thumbs.db
+.DS_Store
+*.tmp
+*.log

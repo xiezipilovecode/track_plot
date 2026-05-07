@@ -1,0 +1,86 @@
+[
+  {
+    "name": "ego",
+    "x": 0.65,
+    "y": -0.18,
+    "z": 1.22,
+    "pitch": -7.5,
+    "yaw": 0.0,
+    "roll": 0.0,
+    "width": 800,
+    "height": 600,
+    "fov": 90
+  },
+  {
+    "name": "front",
+    "x": 2.6,
+    "y": 0.0,
+    "z": 1.7,
+    "pitch": -1.0,
+    "yaw": 0.0,
+    "roll": 0.0,
+    "width": 800,
+    "height": 600,
+    "fov": 90
+  },
+  {
+    "name": "front_left",
+    "x": 1.3,
+    "y": -0.8,
+    "z": 1.45,
+    "pitch": -3.0,
+    "yaw": -35.0,
+    "roll": 0.0,
+    "width": 800,
+    "height": 600,
+    "fov": 90
+  },
+  {
+    "name": "front_right",
+    "x": 1.3,
+    "y": 0.8,
+    "z": 1.45,
+    "pitch": -3.0,
+    "yaw": 35.0,
+    "roll": 0.0,
+    "width": 800,
+    "height": 600,
+    "fov": 90
+  },
+  {
+    "name": "left",
+    "x": 0.0,
+    "y": -1.0,
+    "z": 1.4,
+    "pitch": -2.0,
+    "yaw": -90.0,
+    "roll": 0.0,
+    "width": 800,
+    "height": 600,
+    "fov": 90
+  },
+  {
+    "name": "right",
+    "x": 0.0,
+    "y": 1.0,
+    "z": 1.4,
+    "pitch": -2.0,
+    "yaw": 90.0,
+    "roll": 0.0,
+    "width": 800,
+    "height": 600,
+    "fov": 90
+  },
+  {
+    "name": "rear",
+    "x": -1.8,
+    "y": 0.0,
+    "z": 1.5,
+    "pitch": -2.0,
+    "yaw": 180.0,
+    "roll": 0.0,
+    "width": 800,
+    "height": 600,
+    "fov": 90
+  }
+]
