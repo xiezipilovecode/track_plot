@@ -3,141 +3,141 @@ layout: home
 hero:
   name: "TAT Dataset"
   text: TunnelAutopilot‑Tunnel
-  tagline: 61 vehicles · 3,504 frames/camera · 24,528 RGB images · 24,528 instance masks · 27,763 COCO bboxes
+  tagline: 61 辆车 · 3,504 帧/相机 · 24,528 张 RGB 图像 · 24,528 张实例掩码 · 27,763 个 COCO 标注框
   image:
     src: /muti-view-sample.png
-    alt: TAT multi-view camera sample
+    alt: TAT 多视角相机样本
   actions:
     - theme: brand
-      text: Browse Data Format
+      text: 浏览数据格式
       link: /data-format
     - theme: alt
-      text: Download Dataset
+      text: 下载数据集
       link: /download
 features:
   - icon: 📊
-    title: 61 Vehicles · 61 Runs
-    details: Collected across 6 batches with varied traffic density and speed. Each run captures ~180 seconds of autonomous driving in a realistic 3‑lane CARLA tunnel — a total of over 3 hours of driving data.
+    title: 61 辆车 · 61 次采集
+    details: 分 6 个批次采集，涵盖不同车流密度和速度。每次采集约 180 秒，在逼真的 CARLA 三车道隧道中自动驾驶运行——总计超过 3 小时的驾驶数据。
   - icon: 📷
-    title: 7‑Camera Surround View
-    details: Bird`s‑eye (ego), forward, forward‑left/right, side‑left/right, and rear — all hard‑synchronized by <code>world_frame</code>. 3,504 frames per camera provide rich spatial context for behavior cloning and 3D perception.
+    title: 7 相机环视
+    details: 鸟瞰（自车）、前向、左前/右前、左侧/右侧、后向——全部由 <code>world_frame</code> 硬同步。每相机 3,504 帧，为行为克隆和 3D 感知提供丰富的空间上下文。
   - icon: 🎯
-    title: Instance Segmentation (24K Masks)
-    details: Pixel‑level vehicle instance masks paired with <strong>every</strong> RGB frame — 24,528 masks with 100% coverage. Each vehicle instance labeled with a unique color ID, ready for segmentation model training.
+    title: 实例分割（24K 掩码）
+    details: 像素级车辆实例掩码与<strong>每一张</strong> RGB 图像配对——24,528 张掩码，覆盖率 100%。每辆车实例标注唯一颜色 ID，可直接用于分割模型训练。
   - icon: 📦
-    title: COCO 2D Detection (27K Bboxes)
-    details: 27,763 bounding boxes across all frames. Available as per‑run COCO files and a global merged <code>coco_annotations.json</code>. Plug‑and‑play with Detectron2, MMDetection, YOLO, and other COCO‑compatible frameworks.
+    title: COCO 2D 检测（27K 标注框）
+    details: 所有帧共 27,763 个标注框。提供每次采集的 COCO 文件和全局合并的 <code>coco_annotations.json</code>。可直接接入 Detectron2、MMDetection、YOLO 等 COCO 兼容框架。
   - icon: 🕹️
-    title: Full Control Supervision
-    details: Per‑frame steer / throttle / brake, ego world pose (x, y, z, yaw), and speed (m/s). 65 labeled frames per run provide dense control signals for behavior cloning and control regression.
+    title: 完整控制监督
+    details: 每帧提供转向/油门/刹车指令、自车世界位姿 (x, y, z, yaw) 和速度 (m/s)。每次采集 65 帧标注数据，为行为克隆和控制回归提供密集控制信号。
   - icon: 🤖
-    title: Automated Collection Pipeline
-    details: 6‑batch collection with configurable density/speed ranges. Fully reproducible — <code>batch_summary.json</code> tracks every run, <code>auto_collect_config.json</code> enables pause‑and‑resume.
+    title: 自动化采集流水线
+    details: 6 批次采集，支持可配置的车流密度/速度范围。完全可复现——<code>batch_summary.json</code> 记录每次采集详情，<code>auto_collect_config.json</code> 支持暂停与恢复。
 ---
 
-## Key Statistics
+## 核心统计
 
 <div class="tat-stats-grid">
   <div class="tat-stat-card">
     <div class="stat-number">61</div>
-    <div class="stat-label">Vehicles<br/>6 collection batches</div>
+    <div class="stat-label">辆车<br/>6 个采集批次</div>
   </div>
   <div class="tat-stat-card">
     <div class="stat-number">24,528</div>
-    <div class="stat-label">RGB Images<br/>800×600 px</div>
+    <div class="stat-label">RGB 图像<br/>800×600 像素</div>
   </div>
   <div class="tat-stat-card">
     <div class="stat-number">24,528</div>
-    <div class="stat-label">Instance Masks<br/>100% paired</div>
+    <div class="stat-label">实例掩码<br/>100% 配对</div>
   </div>
   <div class="tat-stat-card">
     <div class="stat-number">27,763</div>
-    <div class="stat-label">COCO Bboxes<br/>Avg. 1.13 / image</div>
+    <div class="stat-label">COCO 标注框<br/>平均 1.13 / 张</div>
   </div>
 </div>
 
 ---
 
-## About the Dataset
+## 关于数据集
 
 <div class="tat-narrative">
 
-**TunnelAutopilot‑Tunnel (TAT)** is a camera‑only autonomous driving dataset collected in a realistic CARLA 3‑lane tunnel environment. Unlike sunny‑day highway benchmarks, TAT captures the unique perceptual challenges of tunnel driving:
+**TunnelAutopilot‑Tunnel (TAT)** 是一个纯视觉自动驾驶数据集，采集自逼真的 CARLA 三车道隧道环境。与晴朗天气的高速公路基准不同，TAT 捕捉了隧道驾驶的独特感知挑战：
 
-- **Low and uneven illumination** — tunnel lighting creates sharp shadows and glare spots that challenge vision models.
-- **Structural repetition** — uniform walls, lane markings, and ceiling patterns make feature matching and localization difficult.
-- **Dynamic multi‑vehicle traffic** — 61 proxy vehicles drive simultaneously with realistic car‑following and lane‑changing behaviors.
+- **低照度与不均匀照明**——隧道灯光产生强烈阴影和眩光斑点，对视觉模型构成挑战。
+- **结构重复性**——统一的墙壁、车道线和天花板图案使特征匹配和定位变得困难。
+- **动态多车交通流**——61 辆代理车辆同时行驶，具备逼真的跟车与换道行为。
 
-The dataset provides **7 synchronized RGB cameras** per vehicle, **instance segmentation masks** for every frame, and **27,763 COCO 2D bounding boxes** across all runs. A global merged COCO file makes it trivial to plug into standard detection frameworks.
+本数据集为每辆车提供 **7 台同步 RGB 相机**、每帧**实例分割掩码**，以及全部采集共 **27,763 个 COCO 2D 标注框**。全局合并的 COCO 文件可直接接入标准检测框架。
 
 </div>
 
 <div class="tat-info-box">
-  <div class="box-title">📖 Collection Methodology</div>
-  Data was collected using an <strong>automated balanced strategy</strong>: the system iterates through proxy vehicles, records ~180 seconds of driving per vehicle, then switches to the next. Six batches were run with varied traffic density and vehicle speed ranges to ensure behavioral diversity. All collection parameters are recorded in <code>batch_summary.json</code> and <code>auto_collect_config.json</code> for full reproducibility.
+  <div class="box-title">📖 采集方法</div>
+  数据采用<strong>自动化均衡策略</strong>采集：系统依次遍历代理车辆，每辆车记录约 180 秒的驾驶数据，然后切换到下一辆。共运行 6 个批次，每次使用不同的车流密度和车速范围，以保证行为多样性。所有采集参数均记录在 <code>batch_summary.json</code> 和 <code>auto_collect_config.json</code> 中，确保完全可复现。
 </div>
 
 ---
 
-## Detailed Statistics
+## 详细统计
 
-| Statistic | Value |
-|-----------|-------|
-| **Total runs** | 61 |
-| **Vehicles** | 61 (1 run per vehicle) |
-| **RGB cameras** | 7 per vehicle |
-| **Frames per camera** | 3,504 |
-| **Frames per run** | 65 |
-| **Total RGB images** | 24,528 |
-| **Instance masks** | 24,528 (100% paired) |
-| **COCO annotations** | 27,763 |
-| **Avg. annotations/image** | 1.13 |
-| **Avg. run duration** | ~180 seconds |
-| **Image resolution** | 800 × 600 px |
-| **Collection date** | 2026‑05‑06 19:26 (UTC+8) |
-| **Collection duration** | ~3 hours (6 batches) |
-| **Simulator** | CARLA (sync mode, `fixed_delta_seconds`) |
-| **Map** | QingShiLing.xodr — 3‑lane tunnel |
+| 统计项 | 数值 |
+|-------|-------|
+| **采集次数** | 61 |
+| **车辆数** | 61（每车 1 次采集） |
+| **RGB 相机数** | 每车 7 台 |
+| **每相机帧数** | 3,504 |
+| **每次采集帧数** | 65 |
+| **RGB 图像总数** | 24,528 |
+| **实例掩码** | 24,528（100% 配对） |
+| **COCO 标注** | 27,763 |
+| **平均标注数/张** | 1.13 |
+| **平均采集时长** | ~180 秒 |
+| **图像分辨率** | 800 × 600 像素 |
+| **采集日期** | 2026‑05‑06 19:26 (UTC+8) |
+| **采集持续时间** | ~3 小时（6 批次） |
+| **仿真器** | CARLA（同步模式，`fixed_delta_seconds`） |
+| **地图** | QingShiLing.xodr——三车道隧道 |
 
 ---
 
-## Visual Overview
+## 可视化概览
 
 <div class="tat-img-grid cols-2" style="margin-top:0">
   <div class="tat-img-figure">
-    <img src="/multi-view-grid.png" alt="All 7 cameras" loading="lazy" />
-    <div class="caption">7 synchronized cameras — proxy_1796, frame 14253598</div>
+    <img src="/multi-view-grid.png" alt="全部 7 相机" loading="lazy" />
+    <div class="caption">7 相机同步视图——proxy_1796，帧 14253598</div>
   </div>
   <div class="tat-img-figure">
-    <img src="/instance-comparison.png" alt="Instance segmentation comparison" loading="lazy" />
-    <div class="caption">RGB vs instance segmentation masks — ego, front, front_right</div>
+    <img src="/instance-comparison.png" alt="实例分割对比" loading="lazy" />
+    <div class="caption">RGB 与实例分割掩码对比——自车、前向、右前</div>
   </div>
   <div class="tat-img-figure">
-    <img src="/coco-detection-front.png" alt="COCO detection front — 9 vehicles" loading="lazy" />
-    <div class="caption">COCO 2D detection — front view (9 vehicles)</div>
+    <img src="/coco-detection-front.png" alt="COCO 检测 前向——9 辆车" loading="lazy" />
+    <div class="caption">COCO 2D 检测——前向视图（9 辆车）</div>
   </div>
   <div class="tat-img-figure">
-    <img src="/coco-detection-front_left.png" alt="COCO detection front_left — 9 vehicles" loading="lazy" />
-    <div class="caption">COCO 2D detection — front‑left view (9 vehicles)</div>
+    <img src="/coco-detection-front_left.png" alt="COCO 检测 左前——9 辆车" loading="lazy" />
+    <div class="caption">COCO 2D 检测——左前视图（9 辆车）</div>
   </div>
 </div>
 
 ---
 
-## News
+## 新闻
 
-- **2026‑05‑06** — v2.0 release. 61 vehicles across 6 batches, 24.5K RGB + instance masks + 27.7K COCO bboxes. Global merged `coco_annotations.json` available for detection frameworks.
-- **2026‑05‑06 (earlier)** — v1.0 pilot batch. 84 vehicles, 13K images (now superseded by v2.0).
+- **2026‑05‑06**——v2.0 发布。6 批次共 61 辆车，24.5K RGB 图像 + 实例掩码 + 27.7K COCO 标注框。提供全局合并 `coco_annotations.json` 供检测框架使用。
+- **2026‑05‑06（更早）**——v1.0 试点批次。84 辆车，13K 图像（已被 v2.0 取代）。
 
-## Quick Links
+## 快速链接
 
-- **[Data Format](./data-format)** — Full schema, COCO annotations (per‑run + global merged), and field tables.
-- **[Sensors](./sensors)** — Camera specs, instance segmentation, and multi‑view samples.
-- **[Download](./download)** — Data packs and train/val/test split (70/15/15 by run).
-- **[DevKit](./devkit)** — Python snippets for reading, validating, and merging COCO.
-- **[Tasks](./tasks)** — Behavior Cloning, 2D detection, instance segmentation benchmarks.
+- **[数据格式](./data-format)**——完整 Schema、COCO 标注（每次采集 + 全局合并）和字段表。
+- **[传感器](./sensors)**——相机规格、实例分割和多视角示例。
+- **[下载](./download)**——数据包及训练/验证/测试划分（按采集次 70/15/15）。
+- **[开发工具包](./devkit)**——Python 代码片段：读取、校验和合并 COCO。
+- **[任务](./tasks)**——行为克隆、2D 检测、实例分割基准。
 
-## Citation
+## 引用
 
 ```bibtex
 @misc{tat2026,
@@ -154,5 +154,5 @@ The dataset provides **7 synchronized RGB cameras** per vehicle, **instance segm
 ---
 
 <div style="text-align:center;color:var(--tat-text-light);font-size:.9rem;margin-top:2rem">
-  <em>Inspired by the KITTI Vision Benchmark Suite — clarity, reproducibility, and academic rigor.</em>
+  <em>灵感源自 KITTI Vision Benchmark Suite——追求清晰性、可复现性和学术严谨性。</em>
 </div>

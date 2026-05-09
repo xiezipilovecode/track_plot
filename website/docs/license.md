@@ -1,27 +1,27 @@
-# License & Citation
+# 许可与引用
 
 ---
 
-## License
+## 许可
 
-::: warning Pending
-The dataset license has not yet been formally declared. We recommend the following terms (to be finalized before public release):
+::: warning 待定
+数据集的许可协议尚未正式声明。我们建议以下条款（将在公开发布前最终确定）：
 :::
 
-**Proposed terms:**
+**拟定条款：**
 
-- ✅ **Research use** — Free for academic and non‑commercial research.
-- ✅ **Attribution** — Cite the dataset in any publication that uses it.
-- ❌ **Redistribution** — Do not redistribute modified versions without permission.
-- ❌ **Commercial use** — Contact the authors for commercial licensing.
+- ✅ **研究用途** — 学术和非商业研究免费使用。
+- ✅ **署名** — 在任何使用本数据集的出版物中引用。
+- ❌ **再分发** — 未经许可不得再分发修改版本。
+- ❌ **商业用途** — 商业许可请联系作者。
 
-Final license text will be published here and included in the dataset download package.
+最终许可文本将在此处发布，并包含在数据集下载包中。
 
 ---
 
-## Citation
+## 引用
 
-If you use the TAT dataset in your research, please cite:
+如果您在研究中使用了 TAT 数据集，请引用：
 
 ```bibtex
 @misc{tat2026,
@@ -35,18 +35,18 @@ If you use the TAT dataset in your research, please cite:
 
 ---
 
-## Contact
+## 联系方式
 
-For questions, collaborations, or commercial licensing inquiries:
+如有问题、合作或商业许可咨询：
 
-- 📧 **Email** — (to be added)
-- 🌐 **Project Page** — (to be added)
-- 🐙 **GitHub** — (to be added)
+- 📧 **邮箱** — （待补充）
+- 🌐 **项目主页** — （待补充）
+- 🐙 **GitHub** — （待补充）
 
 ---
 
-## Acknowledgments
+## 致谢
 
-This dataset was collected using the CARLA open‑source simulator. We thank the CARLA team for their excellent platform.
+本数据集使用 CARLA 开源仿真器采集。感谢 CARLA 团队提供卓越的平台。
 
 > **CARLA**: Dosovitskiy, A., Ros, G., Codevilla, F., Lopez, A., & Koltun, V. (2017). CARLA: An Open Urban Driving Simulator. *CoRL*.

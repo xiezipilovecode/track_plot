@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   title: 'TAT Dataset',
-  description: 'TunnelAutopilot-Tunnel (TAT): 61-vehicle CARLA tunnel dataset with 24K+ RGB images, instance masks, and 27K+ COCO 2D bboxes.',
+  description: 'TunnelAutopilot-Tunnel (TAT)：包含 61 辆车、24K+ RGB 图像、实例掩码及 27K+ COCO 二维边界框的 CARLA 隧道数据集。',
   lang: 'zh-CN',
   head: [
     ['link', { rel: 'icon', href: '/favicon.ico' }],
@@ -13,13 +13,13 @@ export default defineConfig({
   themeConfig: {
     // -- 导航栏 --
     nav: [
-      { text: 'Home',       link: '/' },
-      { text: 'Sensors',    link: '/sensors' },
-      { text: 'Data Format', link: '/data-format' },
-      { text: 'Tasks',      link: '/tasks' },
-      { text: 'Download',   link: '/download' },
-      { text: 'DevKit',     link: '/devkit' },
-      { text: 'License',    link: '/license' },
+      { text: '首页',       link: '/' },
+      { text: '传感器',    link: '/sensors' },
+      { text: '数据格式', link: '/data-format' },
+      { text: '任务',      link: '/tasks' },
+      { text: '下载',   link: '/download' },
+      { text: '开发工具',     link: '/devkit' },
+      { text: '许可与引用',    link: '/license' },
     ],
 
     // -- 侧边栏 --
@@ -27,21 +27,21 @@ export default defineConfig({
       {
         text: 'TAT Dataset',
         items: [
-          { text: 'Home',         link: '/' },
-          { text: 'Sensors',      link: '/sensors' },
-          { text: 'Data Format',  link: '/data-format' },
-          { text: 'Tasks',        link: '/tasks' },
-          { text: 'Download',     link: '/download' },
-          { text: 'DevKit',       link: '/devkit' },
-          { text: 'License & Citation', link: '/license' },
+          { text: '首页',         link: '/' },
+          { text: '传感器',      link: '/sensors' },
+          { text: '数据格式',  link: '/data-format' },
+          { text: '任务',        link: '/tasks' },
+          { text: '下载',     link: '/download' },
+          { text: '开发工具',       link: '/devkit' },
+          { text: '许可与引用', link: '/license' },
         ],
       },
     ],
 
     // -- 页脚 --
     footer: {
-      message: 'TunnelAutopilot-Tunnel (TAT) Dataset · CARLA tunnel scenario',
-      copyright: '© 2026 TAT Dataset Contributors',
+      message: 'TunnelAutopilot-Tunnel (TAT) 数据集 · CARLA 隧道场景',
+      copyright: '© 2026 TAT 数据集贡献者',
     },
 
     // -- 搜索（本地） --

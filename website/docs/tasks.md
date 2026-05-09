@@ -1,111 +1,111 @@
-﻿# Tasks & Benchmarks
+﻿# 任务与基准
 
 <div class="tat-lead">
-TAT v2.0 supports <strong>four recommended tasks</strong> spanning perception and control. With 24,528 annotated frames and 27,763 COCO bboxes, the dataset provides sufficient scale for training production‑grade models. A formal leaderboard is planned for a future release.
+TAT v2.0 支持 <strong>四项推荐任务</strong>，涵盖感知与控制。凭借 24,528 帧标注数据和 27,763 个 COCO 边界框，该数据集为训练生产级模型提供了充足规模。正式排行榜计划在后续版本中推出。
 </div>
 
 ---
 
-## Dataset Scale for ML
+## 机器学习所用数据集规模
 
-| Aspect | Detail |
+| 项目 | 详情 |
 |--------|--------|
-| Total samples (labels.jsonl) | 3,965 (65 per run × 61 runs) |
-| Image samples (all cameras) | 24,528 |
-| Instance mask samples | 24,528 |
-| COCO annotations | 27,763 |
-| Recommended split | 70/15/15 by run (43 train / 9 val / 9 test) |
-| Training images (train × 7 cams) | ~19,565 |
-| Training COCO bboxes | ~19,434 |
+| 总样本数 (labels.jsonl) | 3,965 (每趟 65 条 × 61 趟) |
+| 图像样本 (全部相机) | 24,528 |
+| 实例掩码样本 | 24,528 |
+| COCO 标注数 | 27,763 |
+| 推荐划分 | 按趟 70/15/15 (43 训练 / 9 验证 / 9 测试) |
+| 训练图像 (训练集 × 7 相机) | ~19,565 |
+| 训练 COCO 边界框 | ~19,434 |
 
 <div class="tat-highlight">
-  <strong>Split Rule:</strong> Always split by run, never by frame. A single <code>run_*</code> must be entirely in train, val, or test. This prevents temporal leakage — frames within a run are only seconds apart and highly correlated.
+  <strong>划分规则：</strong>始终按趟划分，切勿按帧划分。单个 <code>run_*</code> 必须完整地属于训练集、验证集或测试集之一。这样可以防止时序泄露——同一趟内的帧之间仅相隔数秒，高度相关。
 </div>
 
 ---
 
-## 1. Behavior Cloning (BC)
+## 1. 行为克隆 (BC)
 
-Learn a direct mapping from camera pixels to vehicle controls. This is the primary end‑to‑end task supported by TAT.
+学习从相机像素到车辆控制信号的直接映射。这是 TAT 所支持的核心端到端任务。
 
-| Aspect | Detail |
+| 项目 | 详情 |
 |--------|--------|
-| **Input** | Single camera image (800×600) or multi‑camera stack |
-| **Output** | `steer` ∈ [‑1, 1], `throttle` ∈ [0, 1], `brake` ∈ [0, 1] |
-| **Training samples** | ~19,565 images (train split × 7 cameras) |
-| **Metrics** | MSE / MAE per control channel; lane‑keeping success rate in closed‑loop simulation |
-| **Split** | By run — prevents temporal information leakage |
+| **输入** | 单相机图像 (800×600) 或多相机堆叠 |
+| **输出** | `steer` ∈ [‑1, 1]、`throttle` ∈ [0, 1]、`brake` ∈ [0, 1] |
+| **训练样本** | ~19,565 张图像 (训练划分 × 7 个相机) |
+| **评价指标** | 每个控制通道的 MSE / MAE；闭环仿真中的车道保持成功率 |
+| **划分方式** | 按趟划分——防止时序信息泄露 |
 
 <div class="tat-narrative">
-  <strong>Suggested approach:</strong> Start with a single front‑camera CNN (ResNet‑18/50 backbone), then experiment with multi‑view fusion. Tunnel walls and lane markings provide strong geometric priors that multi‑view architectures can exploit for improved lateral control.
+  <strong>建议方案：</strong>从单前视相机 CNN (ResNet‑18/50 主干网络) 入手，再尝试多视图融合。隧道墙壁和车道线提供了强烈的几何先验，多视图架构可利用这些先验来改善横向控制。
 </div>
 
 ---
 
-## 2. 2D Vehicle Detection
+## 2. 2D 车辆检测
 
-Detect vehicles in tunnel images using standard COCO‑compatible frameworks.
+使用标准 COCO 兼容框架检测隧道图像中的车辆。
 
-| Aspect | Detail |
+| 项目 | 详情 |
 |--------|--------|
-| **Input** | RGB image (800×600) |
-| **Output** | Bounding boxes: `[x, y, w, h]` per vehicle |
-| **Format** | COCO JSON — per‑run or global merged `coco_annotations.json` |
-| **Classes** | 1 (`vehicle`) |
-| **Training bboxes** | ~19,434 (train split) |
-| **Compatible frameworks** | Detectron2, MMDetection, YOLO, DETR, Faster R‑CNN |
+| **输入** | RGB 图像 (800×600) |
+| **输出** | 边界框：每辆车 `[x, y, w, h]` |
+| **格式** | COCO JSON——按趟独立或全局合并的 `coco_annotations.json` |
+| **类别** | 1 类 (`vehicle`) |
+| **训练边界框** | ~19,434 (训练划分) |
+| **兼容框架** | Detectron2、MMDetection、YOLO、DETR、Faster R‑CNN |
 
 <div class="tat-info-box">
-  <div class="box-title">🚀 Quick Start with Detectron2</div>
+  <div class="box-title">🚀 Detectron2 快速上手</div>
 
 ```python
-# Load the global merged COCO
+# 加载全局合并的 COCO
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.data.datasets import register_coco_instances
 
 register_coco_instances("tat_train", {},
-    "dataset/coco_annotations.json",  # ← global merged file
-    "dataset"                          # image root
+    "dataset/coco_annotations.json",  # ← 全局合并文件
+    "dataset"                          # 图像根目录
 )
 ```
 
-The global `coco_annotations.json` is plug‑and‑play — no additional preprocessing needed.
+全局 `coco_annotations.json` 即开即用——无需额外的预处理步骤。
 </div>
 
 ---
 
-## 3. Instance Segmentation
+## 3. 实例分割
 
-Predict per‑pixel vehicle instance masks from RGB input.
+从 RGB 输入预测逐像素的车辆实例掩码。
 
-| Aspect | Detail |
+| 项目 | 详情 |
 |--------|--------|
-| **Input** | RGB image (800×600) |
-| **Output** | Per‑pixel instance mask (unique ID per vehicle) |
-| **Training masks** | ~19,565 (train split) |
-| **Ground truth format** | PNG under `images/<camera>_instance/` |
-| **Compatible frameworks** | Mask R‑CNN, YOLACT, SOLO, Mask2Former |
+| **输入** | RGB 图像 (800×600) |
+| **输出** | 逐像素实例掩码 (每辆车唯一 ID) |
+| **训练掩码** | ~19,565 (训练划分) |
+| **真值格式** | PNG，位于 `images/<camera>_instance/` 目录下 |
+| **兼容框架** | Mask R‑CNN、YOLACT、SOLO、Mask2Former |
 
 <div class="tat-narrative">
-  Instance masks provide dense supervision for segmentation models. Combined with the multi‑view setup, this enables training models that can reason about vehicle shapes from multiple viewpoints — particularly valuable in tunnels where occlusions and lighting variations are common.
+  实例掩码为分割模型提供了密集监督信号。结合多视角设置，可以训练出能从多个视角推理车辆形状的模型——这在遮挡和光照变化频繁的隧道场景中尤为有价值。
 </div>
 
 ---
 
-## 4. Speed & Yaw Regression (Auxiliary)
+## 4. 速度与偏航角回归 (辅助任务)
 
-| Aspect | Detail |
+| 项目 | 详情 |
 |--------|--------|
-| **Input** | Single or multi‑camera image |
-| **Output** | `speed_mps` (m/s), `vehicle_yaw` (degrees) |
-| **Metrics** | RMSE, Pearson correlation |
-| **Use case** | Auxiliary loss for BC models; standalone ego‑state estimator |
+| **输入** | 单相机或多相机图像 |
+| **输出** | `speed_mps` (米/秒)、`vehicle_yaw` (度) |
+| **评价指标** | RMSE、Pearson 相关系数 |
+| **使用场景** | BC 模型的辅助损失；独立的自车状态估计器 |
 
 ---
 
-## Future Plans
+## 未来计划
 
-- **Leaderboard** — formal submission format + automated evaluation script.
-- **Multi‑view 3D detection** — once intrinsic/extrinsic matrices are exported in matrix form.
-- **Trajectory prediction** — temporal modeling across `world_frame` sequences.
-- **Additional runs** — expanding beyond the initial 61 vehicles.
+- **排行榜**——正式提交格式 + 自动化评估脚本。
+- **多视图 3D 检测**——待内参/外参矩阵以矩阵形式导出后启动。
+- **轨迹预测**——跨 `world_frame` 序列的时序建模。
+- **更多数据趟**——在初始 61 辆车的基础上进一步扩展。

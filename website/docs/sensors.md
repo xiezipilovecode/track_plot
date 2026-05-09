@@ -1,73 +1,74 @@
-﻿# Sensors
+﻿
+# 传感器
 
 <div class="tat-lead">
-The TAT dataset captures <strong>7 synchronized RGB cameras</strong> per vehicle, providing full surround‑view coverage of the tunnel environment. Every camera frame comes with a corresponding <strong>pixel‑level instance segmentation mask</strong> — 24,528 masks in total, 100% paired.
+TAT 数据集每辆车配备 <strong>7 路同步 RGB 摄像头</strong>，提供隧道环境的全方位环绕覆盖。每帧摄像头图像都有对应的 <strong>像素级实例分割掩码</strong>——共计 24,528 张掩码，100% 配对。
 </div>
 
 ---
 
-## Multi‑View Sample (7 Cameras)
+## 多视角示例（7 路摄像头）
 
-All 7 synchronized cameras at a single `world_frame` (frame 14253598, proxy_1796, run_20260506_163611):
+同一 `world_frame` 下的全部 7 路同步摄像头（第 14253598 帧，proxy_1796，run_20260506_163611）：
 
 <div class="tat-img-full">
-  <img src="/multi-view-grid.png" alt="All 7 cameras at one frame" />
-  <div class="caption">All 7 synchronized cameras — ego, front, front_left, front_right, left, right, rear (frame 14253598)</div>
+  <img src="/multi-view-grid.png" alt="同一帧下的全部 7 路摄像头" />
+  <div class="caption">全部 7 路同步摄像头——ego、front、front_left、front_right、left、right、rear（第 14253598 帧）</div>
 </div>
 
 <div class="tat-narrative">
-The multi‑view configuration provides comprehensive spatial awareness: the <strong>forward‑facing cameras</strong> (front, front‑left, front‑right) capture the road ahead and adjacent lanes; the <strong>side cameras</strong> (left, right) monitor lateral traffic; the <strong>rear camera</strong> tracks following vehicles; and the <strong>ego (bird`s‑eye) camera</strong> provides a top‑down view useful for localization and lane‑keeping analysis.
+多视角配置提供了全面的空间感知能力：<strong>前向摄像头</strong>（front、front‑left、front‑right）捕捉前方道路及相邻车道；<strong>侧面摄像头</strong>（left、right）监控侧方交通；<strong>后向摄像头</strong>（rear）追踪后方车辆；而 <strong>ego（鸟瞰）摄像头</strong>则提供俯视视角，可用于定位与车道保持分析。
 </div>
 
 ---
 
-## RGB vs. Instance Segmentation
+## RGB 与实例分割
 
-Every RGB frame has a corresponding pixel‑level instance mask. Below are three camera views with their instance masks — each color represents a distinct vehicle instance.
+每帧 RGB 图像都有对应的像素级实例掩码。以下是三个摄像头视角及其实例掩码——每种颜色代表一个不同的车辆实例。
 
 <div class="tat-img-full">
-  <img src="/instance-comparison.png" alt="RGB vs Instance Segmentation comparison" />
-  <div class="caption">Top row: RGB camera views. Bottom row: Instance segmentation masks (each color = one vehicle instance). All from frame 14253598.</div>
+  <img src="/instance-comparison.png" alt="RGB 与实例分割对比" />
+  <div class="caption">上行：RGB 摄像头视角。下行：实例分割掩码（每种颜色 = 一个车辆实例）。全部来自第 14253598 帧。</div>
 </div>
 
 <div class="tat-highlight">
-  <strong>100% Coverage:</strong> All 24,528 RGB images have matching instance segmentation masks — no missing frames, no partial coverage. This makes TAT immediately usable for supervised instance segmentation training.
+  <strong>100% 覆盖：</strong>全部 24,528 张 RGB 图像均有匹配的实例分割掩码——无缺失帧，无部分覆盖。这使得 TAT 数据集可直接用于监督式实例分割训练。
 </div>
 
 ---
 
-## Camera Suite
+## 摄像头组
 
-| Camera | Directory | Orientation | Frames (total) | Primary Use Case |
+| 摄像头 | 目录 | 朝向 | 帧数（总计） | 主要用途 |
 |--------|-----------|-------------|:---:|-------|
-| Ego (overhead) | `ego` | Top‑down / bird`s‑eye | 3,504 | Localization, lane‑keeping visualization |
-| Front | `front` | Forward | 3,504 | Primary driving perspective |
-| Front‑Left | `front_left` | Forward‑left (~45°) | 3,504 | Left lane & blind spot coverage |
-| Front‑Right | `front_right` | Forward‑right (~45°) | 3,504 | Right lane & blind spot coverage |
-| Left | `left` | Left side (~90°) | 3,504 | Lateral awareness |
-| Right | `right` | Right side (~90°) | 3,504 | Lateral awareness |
-| Rear | `rear` | Backward | 3,504 | Following traffic monitoring |
+| Ego（俯视） | `ego` | 俯视 / 鸟瞰 | 3,504 | 定位、车道保持可视化 |
+| Front | `front` | 前方 | 3,504 | 主驾驶视角 |
+| Front‑Left | `front_left` | 前方左侧（约 45°） | 3,504 | 左侧车道与盲区覆盖 |
+| Front‑Right | `front_right` | 前方右侧（约 45°） | 3,504 | 右侧车道与盲区覆盖 |
+| Left | `left` | 左侧（约 90°） | 3,504 | 侧方感知 |
+| Right | `right` | 右侧（约 90°） | 3,504 | 侧方感知 |
+| Rear | `rear` | 后方 | 3,504 | 后方交通监控 |
 
-**Total**: 7 cameras × 3,504 frames = **24,528 RGB images + 24,528 instance masks** (61 runs × 65 frames/run).
+**总计**：7 路摄像头 × 3,504 帧 = **24,528 张 RGB 图像 + 24,528 张实例掩码**（61 趟 × 65 帧/趟）。
 
 ---
 
-## Camera Properties (from `metadata.json`)
+## 摄像头属性（来自 `metadata.json`）
 
-Each camera entry in `metadata.json → cameras[]` provides mount pose and imaging parameters:
+`metadata.json → cameras[]` 中的每个摄像头条目提供了挂载位姿与成像参数：
 
-| Field | Type | Meaning |
+| 字段 | 类型 | 含义 |
 |-------|------|---------|
-| `name` | `str` | Camera name (matches image subdirectory) |
-| `x`, `y`, `z` | `float` | Mount position relative to vehicle body (meters) |
-| `pitch` | `float` | Pitch angle (degrees) |
-| `yaw` | `float` | Yaw angle (degrees) |
-| `roll` | `float` | Roll angle (degrees) |
-| `width` | `int` | Image width (px) — 800 |
-| `height` | `int` | Image height (px) — 600 |
-| `fov` | `float` | Horizontal field‑of‑view (degrees) |
+| `name` | `str` | 摄像头名称（对应图像子目录） |
+| `x`、`y`、`z` | `float` | 相对于车辆本体的挂载位置（米） |
+| `pitch` | `float` | 俯仰角（度） |
+| `yaw` | `float` | 偏航角（度） |
+| `roll` | `float` | 翻滚角（度） |
+| `width` | `int` | 图像宽度（px）——800 |
+| `height` | `int` | 图像高度（px）——600 |
+| `fov` | `float` | 水平视场角（度） |
 
-> For geometric or sensor‑fusion tasks that require matrix‑form intrinsics, approximate `K` (pinhole model) as:
+> 对于需要矩阵形式内参的几何或传感器融合任务，可按以下公式近似 `K`（针孔模型）：
 
 ```
 fx = width  / (2 * tan(fov / 2))
@@ -78,20 +79,20 @@ cy = height / 2
 
 ---
 
-## Instance Segmentation
+## 实例分割
 
-Each run includes 7 `*_instance/` directories — one per RGB camera — containing PNG masks where each pixel value encodes a unique vehicle instance ID.
+每趟运行包含 7 个 `*_instance/` 目录——每个 RGB 摄像头对应一个——其中包含 PNG 掩码，每个像素值编码了一个唯一的车辆实例 ID。
 
-| Attribute | Value |
+| 属性 | 值 |
 |-----------|-------|
-| Format | PNG (800×600, 24‑bit RGB) |
-| Encoding | Per‑pixel instance ID (color‑coded by COCO mapping) |
-| Coverage | 24,528 masks — 100% of RGB frames |
-| Generation | `TT_COLLECT_ENABLE_INSTANCE_SEGMENTATION=1` |
-| Suffix convention | `TT_COLLECT_INSTANCE_SUFFIX=_instance` |
+| 格式 | PNG（800×600，24 位 RGB） |
+| 编码方式 | 逐像素实例 ID（按 COCO 映射着色） |
+| 覆盖范围 | 24,528 张掩码——覆盖 100% 的 RGB 帧 |
+| 生成开关 | `TT_COLLECT_ENABLE_INSTANCE_SEGMENTATION=1` |
+| 后缀约定 | `TT_COLLECT_INSTANCE_SUFFIX=_instance` |
 
 <div class="tat-info-box">
-  <div class="box-title">🔍 Reading Instance Masks in Python</div>
+  <div class="box-title">🔍 用 Python 读取实例掩码</div>
 
 ```python
 from PIL import Image
@@ -102,5 +103,5 @@ unique_ids = np.unique(mask)
 print(f"Vehicles in frame: {len(unique_ids) - 1}")  # subtract background (0)
 ```
 
-The color‑to‑instance‑ID mapping is defined in the COCO annotations — each `annotation` in `coco_instances.json` links an instance to its bounding box.
+颜色到实例 ID 的映射定义在 COCO 标注中——`coco_instances.json` 中的每个 `annotation` 将实例与其边界框关联。
 </div>
