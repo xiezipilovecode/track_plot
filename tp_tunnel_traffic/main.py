@@ -22,6 +22,7 @@ from .autopilot import configure_autopilot, configure_traffic_manager
 from .control import compute_control
 from .vehicle_plan import build_vehicle_plan
 from .collector import DatasetCollector
+from .video_collector import VideoCollector
 from .lane_sampling import build_center_lane_path, build_three_lane_paths
 from .spawning import destroy_spawned_actors, try_spawn_vehicle
 from .gui import TunnelTrafficGUI
@@ -282,6 +283,7 @@ def _build_capture_state_provider(
     view_mode,
     yaw_offset,
     collect_proxy_enabled: bool,
+    video_recording: bool,
     overview_state,
 ):
     return {
@@ -291,6 +293,7 @@ def _build_capture_state_provider(
         "proxies": _collect_proxy_state_snapshot(proxy_states),
         "collect_output_by_target": bool(getattr(config, "collect_output_by_target", True)),
         "collect_proxy_enabled": bool(collect_proxy_enabled),
+        "video_recording": bool(video_recording),
         "overview_state": dict(overview_state or {}),
     }
 
@@ -362,6 +365,7 @@ def main():
     original_settings = None
     spawned = []
     collector = None
+    video_collector = None
     try:
         original_settings = world.get_settings()
         if config.sync_mode:
@@ -603,6 +607,7 @@ def main():
         capture_vehicle = None
         capture_proxy_state = None
         collect_proxy_enabled = False
+        video_recording = False
         proxy_first_person = True
         start_tf = lane_points[0].transform
         next_tf = lane_points[1].transform
@@ -633,8 +638,9 @@ def main():
                 selected_proxy_actor_id,
                 getattr(_update_camera_yaw_hotkeys, "view_mode", getattr(config, "camera_mode", "ego")),
                 float(getattr(_follow_driver_view, "yaw_offset_deg", 0.0)),
-                bool(collect_proxy_enabled),
-                {
+                    bool(collect_proxy_enabled),
+                    bool(video_recording),
+                    {
                     "yaw_deg": overview_yaw_deg,
                     "pitch_deg": overview_pitch_deg,
                     "pos": tuple(overview_pos),
@@ -656,6 +662,11 @@ def main():
             f"采集初始化: enabled=OFF, output_base={Path(config.collect_output_dir)}, "
             f"by_target={bool(getattr(config, 'collect_output_by_target', True))}"
         )
+
+        # Video collector (independent from dataset collector)
+        video_collector = VideoCollector(carla, world, config, lane_points) if config.video_enable else None
+        if video_collector is not None:
+            print(f"视频录制初始化: enabled=OFF, output_base={Path(config.video_output_dir)}")
 
         def _spawn_proxy_from_plan(plan) -> bool:
             lane_index = int(plan.lane_index)
@@ -889,6 +900,11 @@ def main():
                         yaw = 0.0
                     elif gui_action == "toggle_collect_target":
                         if selected_proxy_actor_id is not None:
+                            # 互斥：开启采集时关闭视频录制
+                            if collect_proxy_enabled and video_recording and video_collector is not None:
+                                video_collector.stop()
+                                video_recording = False
+                                print("Record Video: OFF（因开启数据集采集自动停止）")
                             collect_proxy_enabled = not bool(collect_proxy_enabled)
                             target_dir = _target_output_path(config, selected_proxy_actor_id, "proxy")
                             run_dir = target_dir / datetime.now().strftime("run_%Y%m%d_%H%M%S") if collect_proxy_enabled else target_dir
@@ -918,6 +934,28 @@ def main():
                                     pass
                         else:
                             print("Collect Selected: 忽略（当前未选中代理车）")
+                    elif gui_action == "toggle_video_record":
+                        if video_collector is None:
+                            print("Record Video: 未启用（TT_VIDEO_ENABLE=0）")
+                        elif selected_proxy_actor_id is not None and capture_vehicle is not None:
+                            # 互斥：开启视频录制时关闭采集
+                            if not video_recording and collect_proxy_enabled and collector is not None:
+                                collector.set_enabled(False)
+                                collect_proxy_enabled = False
+                                print("Collect Selected: OFF（因开启视频录制自动停止）")
+                            video_recording = not video_recording
+                            if video_recording:
+                                video_collector.set_vehicle(
+                                    capture_vehicle,
+                                    lane_points=(capture_proxy_state.get("lane_points", lane_points) if capture_proxy_state else lane_points),
+                                )
+                                video_collector.start()
+                                print(f"Record Video: ON, target_proxy={selected_proxy_actor_id}")
+                            else:
+                                video_collector.stop()
+                                print(f"Record Video: OFF")
+                        else:
+                            print("Record Video: 忽略（当前未选中代理车）")
                     elif gui_action == "overview_reset":
                         _reset_overview_camera()
                     elif "overview_" in gui_action:
@@ -990,6 +1028,12 @@ def main():
                                         except Exception:
                                             pass
                                     print("Collect Selected: OFF（采集中切换目标，为避免串数据已自动停止）")
+                                # 视频录制跟随新目标
+                                if video_recording and video_collector is not None:
+                                    video_collector.set_vehicle(
+                                        capture_vehicle,
+                                        lane_points=(capture_proxy_state.get("lane_points", lane_points) if capture_proxy_state else lane_points),
+                                    )
                                 if collector is not None:
                                     try:
                                         target_dir = _target_output_path(config, selected_proxy_actor_id, "proxy")
@@ -1042,7 +1086,10 @@ def main():
                             collector.set_enabled(False)
                         except Exception:
                             pass
-                    print("Collect Selected: OFF（目标代理车已失效）")
+                if video_recording and video_collector is not None:
+                    video_collector.stop()
+                    video_recording = False
+                print("Collect Selected: OFF（目标代理车已失效）")
 
             if view_mode == "overview":
                 # Free-fly overview view: WASD/QE + mouse look.
@@ -1095,6 +1142,7 @@ def main():
                     getattr(_update_camera_yaw_hotkeys, "view_mode", getattr(config, "camera_mode", "overview")),
                     float(getattr(_follow_driver_view, "yaw_offset_deg", 0.0)),
                     bool(collect_proxy_enabled),
+                bool(video_recording),
                     {
                         "yaw_deg": overview_yaw_deg,
                         "pitch_deg": overview_pitch_deg,
@@ -1127,6 +1175,18 @@ def main():
                                 pass
                             print("Collect Selected: OFF（采集写盘异常，已自动停采）")
 
+            if video_collector is not None and video_recording:
+                try:
+                    world_frame = int(world.get_snapshot().frame)
+                except Exception:
+                    world_frame = int(collect_tick_idx)
+                try:
+                    video_collector.on_tick(world_frame)
+                except Exception:
+                    video_collector.stop()
+                    video_recording = False
+                    print("Record Video: OFF（写盘异常，已自动停止）")
+
     except KeyboardInterrupt:
         pass
     finally:
@@ -1134,6 +1194,8 @@ def main():
             gui.destroy()
         if collector is not None:
             collector.destroy()
+        if video_collector is not None:
+            video_collector.destroy()
         destroy_spawned_actors(spawned)
         if original_settings is not None:
             try:

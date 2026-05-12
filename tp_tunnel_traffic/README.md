@@ -43,11 +43,17 @@
 - 负责判断三车道是否有效，并跳过无效/重合段
 
 ### `collector.py`
-数据集采集器：
+数据集采集器（帧级）：
 - 多相机 RGB + 实例分割传感器创建与管理
 - labels.jsonl / COCO 2D 标注 / instance PNG 写盘
 - 2D bbox 投影计算（3D→2D）
-- 采集统计与异常检测
+
+### `video_collector.py`
+视频录制器（连续帧）：
+- 7 相机连续帧录制 → `dataset_video/run_*/`
+- 帧级时间戳（timestamps.jsonl）
+- 预留驾驶人压力参数接口（driver_stress.jsonl）
+- 通过 GUI `Record Video` 按钮控制启停
 
 ### `config.py`
 全部配置项（`TunnelTrafficConfig`），通过 `TT_*` / `TP_*` 环境变量覆盖。
@@ -86,6 +92,7 @@ Traffic Manager 集成：自动导航配置与 TM 参数设置。
 
 ### `docs/`
 - `DATASET_COLLECTION_DESIGN.md`：数据集采集模块设计文档
+- `VIDEO_COLLECTION_DESIGN.md`：视频采集模块设计文档（面向驾驶人实时仿真与压力参数采集）
 
 ### `tests/`
 - `test_tunnel_lanes.py`：只显示三车道车道线

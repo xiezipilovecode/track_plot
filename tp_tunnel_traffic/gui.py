@@ -23,7 +23,7 @@ class TunnelTrafficGUI:
         if not self.enabled:
             return
 
-        self.width = 960
+        self.width = 1050
         self.height = 680
         self.panel_h = 86
         
@@ -54,10 +54,11 @@ class TunnelTrafficGUI:
             {"label": "Ego View", "rect": pygame.Rect(18, 18, 110, 36), "action": "ego", "group": "view"},
             {"label": "Overview", "rect": pygame.Rect(140, 18, 120, 36), "action": "overview", "group": "view"},
             {"label": "Collect Selected", "rect": pygame.Rect(272, 18, 170, 36), "action": "toggle_collect_target", "group": "collect"},
-            {"label": "Reset Cam", "rect": pygame.Rect(432, 18, 120, 36), "action": "overview_reset", "group": "overview"},
-            {"label": "Yaw -", "rect": pygame.Rect(592, 18, 86, 36), "action": "yaw_left", "group": "yaw"},
-            {"label": "Reset", "rect": pygame.Rect(688, 18, 86, 36), "action": "yaw_reset", "group": "yaw"},
-            {"label": "Yaw +", "rect": pygame.Rect(784, 18, 86, 36), "action": "yaw_right", "group": "yaw"},
+            {"label": "Record Video", "rect": pygame.Rect(452, 18, 170, 36), "action": "toggle_video_record", "group": "video"},
+            {"label": "Reset Cam", "rect": pygame.Rect(632, 18, 120, 36), "action": "overview_reset", "group": "overview"},
+            {"label": "Yaw -", "rect": pygame.Rect(762, 18, 86, 36), "action": "yaw_left", "group": "yaw"},
+            {"label": "Reset", "rect": pygame.Rect(858, 18, 86, 36), "action": "yaw_reset", "group": "yaw"},
+            {"label": "Yaw +", "rect": pygame.Rect(954, 18, 86, 36), "action": "yaw_right", "group": "yaw"},
         ]
         self.font = pygame.font.SysFont(None, 26)
         self.small_font = pygame.font.SysFont(None, 20)
@@ -171,12 +172,14 @@ class TunnelTrafficGUI:
 
         collect_proxy_enabled = bool(state.get("collect_proxy_enabled", False))
         selected_proxy_actor_id = state.get("selected_proxy_actor_id")
+        video_recording = bool(state.get("video_recording", False))
         target_text = "ego" if selected_proxy_actor_id is None else f"proxy#{int(selected_proxy_actor_id)}"
         mode_text = (
             f"View: {state.get('view_mode', 'ego')}   "
             f"Yaw: {float(state.get('yaw_offset_deg', 0.0)):+.1f}°   "
             f"Target: {target_text}   "
-            f"Collect Target: {'ON' if collect_proxy_enabled else 'OFF'}"
+            f"Collect: {'ON' if collect_proxy_enabled else 'OFF'}   "
+            f"Video: {'ON' if video_recording else 'OFF'}"
         )
         mode_surf = self.small_font.render(mode_text, True, (210, 220, 235))
         self.display.blit(mode_surf, (18, 59))
@@ -192,6 +195,8 @@ class TunnelTrafficGUI:
                 active = current.get("view_mode") == b["action"]
             elif b["group"] == "collect":
                 active = bool(current.get("collect_proxy_enabled", False)) and current.get("selected_proxy_actor_id") is not None
+            elif b["group"] == "video":
+                active = bool(current.get("video_recording", False))
             elif b["group"] == "overview":
                 active = False
             elif b["group"] == "yaw":

@@ -14,7 +14,8 @@ track_plot/
 ├─ tp_replay/                     # 轨迹复现核心包
 ├─ tp_tunnel_traffic/             # 隧道仿真 + 数据集采集
 │  ├─ main.py                     # 隧道场景主入口
-│  ├─ collector.py                # 多相机采集器（RGB/COCO/instance）
+│  ├─ collector.py                # 帧级数据集采集器（RGB/COCO/instance）
+│  ├─ video_collector.py          # 视频录制器（连续帧 + 压力参数）
 │  ├─ config.py                   # 全部环境变量配置
 │  ├─ control.py                  # 自动驾驶控制器
 │  ├─ lane_sampling.py            # 三车道提取
@@ -342,6 +343,13 @@ python .\auto_control_main.py
 
 **隧道仿真 + GUI 采集**：
 ```bat
+python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
+```
+
+**视频录制（GUI Record Video）**：
+```bat
+set TT_VIDEO_ENABLE=1
+set TT_VIDEO_OUTPUT_DIR=dataset_video
 python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
 ```
 

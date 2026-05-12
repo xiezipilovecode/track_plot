@@ -24,6 +24,7 @@ dataset/proxy_*/
 dataset/coco_annotations.json
 dataset/batch_summary.json
 dataset/auto_collect_config.json
+dataset_video/
 
 # Trajectory raw data (太大，只保留 test_data 目录作为测试 fixture)
 trace_data/track24.7.25-24.8.5_79_6lu/*.txt

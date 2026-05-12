@@ -103,6 +103,12 @@ class TunnelTrafficConfig:
     auto_collect_resume: bool = _env_bool("TT_AUTO_COLLECT_RESUME", True)
     auto_collect_output_batch_dir: str = _env_str("TT_AUTO_COLLECT_OUTPUT_BATCH_DIR", "dataset")
 
+    # --- 视频录制（驾驶人实时仿真）---
+    video_enable: bool = _env_bool("TT_VIDEO_ENABLE", False)
+    video_output_dir: str = _env_str("TT_VIDEO_OUTPUT_DIR", r"dataset_video")
+    video_frame_stride: int = _env_int("TT_VIDEO_FRAME_STRIDE", 1)
+    video_cameras_json: str = _env_str("TT_VIDEO_CAMERAS_JSON", r"tp_tunnel_traffic\dataset_cameras.json")
+
     # --- 阶段 B：代理车辆（受约束随机车流）---
     proxy_enable: bool = _env_bool("TT_PROXY_ENABLE", False)
     # 代理车基准速度（m/s），实际每辆车会叠加车道速度分层差异
