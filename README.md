@@ -1,64 +1,103 @@
-# track_plot（CARLA 轨迹复现与处理系统）
+# track_plot（CARLA 轨迹复现与隧道数据集采集系统）
 
-本仓库围绕 CARLA 仿真引擎的隧道场景，提供从**轨迹数据解析→质量校验→地图对齐可视化→自动回放**的完整闭环能力。
+本仓库围绕 CARLA 仿真引擎，提供两大核心能力：
 
-> **核心目标**：把外部采集的车辆轨迹数据（txt/csv/json）准确复现在 CARLA 世界中，保持车道吸附、对齐和逆向行驶等语义。
+- **轨迹复现**：外部车辆轨迹数据解析、质量校验、地图对齐可视化、CARLA 世界中自动回放
+- **隧道仿真与数据集采集**：三车道代理车流生成、多相机图像采集、2D 检测框/实例分割标注、批量自动化导出
 
----
-
-## 1. 项目架构概览
-
-### 1.1 目录结构
+## 项目目录结构
 
 ```text
 track_plot/
-├─ auto_control_main.py        # 推荐回放入口（延迟导入，避免 import 时强依赖 CARLA）
-├─ replay_main.py          # 兼容入口（保留旧脚本用法，可选使用）
-├─ tp_replay/             # 回放核心包（模块化后的引擎与配置）
-│  ├─ __init__.py
-│  ├─ main.py             # 主入口：环境变量覆盖 → ReplayEngine 初始化 → 回放循环
-│  ├─ engine.py           # ReplayEngine：轨迹解析、变换、对齐、回放控制
-│  ├─ config.py          # 全局配置（默认锚点、缩放、吸附阈值等）
-│  ├─ carla_compat.py     # CARLA 延迟导入兼容
-│  ├─ models.py          # 数据模型：TrackFrame、VehicleTrack
-│  ├─ geometry.py        # 几何计算：角度、旋转、XY 提取
-│  ├─ selection.py      # 轨迹挑选与调度策略
-│  ├─ world_utils.py    # 地图生成/天气覆盖等辅助
-│  └─ env_utils.py     # 环境变量解析工具
-├─ tools/                 # 独立工具脚本（推荐路径）
-│  ├─ trace_display.py    # 地图对齐可视化（蓝点原始 / 绿点吸附）
-│  ├─ trace_plot.py    # 轨迹绘图（matplotlib）
-│  ├─ scan_trace_time_ranges.py # 时间范围扫描
-│  ├─ get_position.py  # 实时坐标采集
-│  ├─ get_start.py    # 地图起点获取
-│  ├─ debug_line_width.py  # 线宽调试
-│  ├─ validate_trace_data.py   # 轨迹质量校验
-│  └─ record_spectator_view.py # 视角记录
-├─ trace_data/            # 轨迹数据目录
-│  ├─ test_data/        # 测试/示例轨迹（data_6lu*.txt）
-│  └─ archive/         # 历史脚本归档
-├─ run_logs/            # 运行日志（可再生）
-├─ plot_data/          # 绘图导出（可再生）
-└─ README.md
+├─ auto_control_main.py           # 轨迹回放入口
+├─ run_all_batches.bat            # 一键批量采集脚本
+├─ tp_replay/                     # 轨迹复现核心包
+├─ tp_tunnel_traffic/             # 隧道仿真 + 数据集采集
+│  ├─ main.py                     # 隧道场景主入口
+│  ├─ collector.py                # 多相机采集器（RGB/COCO/instance）
+│  ├─ config.py                   # 全部环境变量配置
+│  ├─ control.py                  # 自动驾驶控制器
+│  ├─ lane_sampling.py            # 三车道提取
+│  ├─ gui.py                      # Pygame GUI 控制台
+│  ├─ spawning.py                 # 车辆生成与净空判定
+│  ├─ vehicle_plan.py             # 代理车计划
+│  ├─ autopilot.py                # Traffic Manager 集成
+│  ├─ merge_coco.py               # 全局 COCO 合并工具
+│  ├─ validate_dataset_run.py     # run 级校验工具
+│  ├─ dataset_cameras.json        # 相机布局配置
+│  ├─ camera_offsets.json         # 视角微调配置
+│  ├─ docs/                       # 设计文档
+│  ├─ tests/                      # 测试入口
+│  └─ README.md                   # 模块详细文档
+├─ tools/                         # 独立工具脚本
+├─ dataset/                       # 数据集输出目录
+│  ├── README.md                  # 数据集说明文档
+│  ├── coco_annotations.json      # 全局 COCO 标注
+│  ├── batch_summary.json         # 批量采集统计
+│  └── proxy_<id>/run_*/          # run 级数据
+├─ trace_data/                    # 轨迹数据
+└─ run_logs/                      # 运行日志
 ```
 
-### 1.2 核心模块职责
+## 一、轨迹复现（tp_replay）
 
-| 模块 | 职责 | 关键 API |
+### 快速开始
+```powershell
+conda activate carla
+cd E:\code\track_plot
+$env:TP_PRESERVE_EXISTING_WORLD='1'
+python .\auto_control_main.py
+```
+
+### 关键配置
+| 环境变量 | 默认值 | 说明 |
 |---|---|---|
-| `tp_replay/main.py` | 程序入口、环境变量注入、日志初始化、世界设置 | `main()` |
-| `tp_replay/engine.py` | 轨迹解析、自动锚点选择、坐标变换、车道吸附、回放循环 | `ReplayEngine.process_data()`, `tick()` |
-| `tp_replay/config.py` | 全部默认值（锚点坐标、缩放、旋转、对齐阈值） | 环境变量覆盖（TP_*） |
-| `tp_replay/carla_compat.py` | CARLA 延迟导入，conda 环境检测 | `require_carla()` |
-| `tp_replay/geometry.py` | 角度计算、稳定基线选择、XY 提取 | `_calculate_stable_data_angle()` |
-| `tp_replay/models.py` | 数据结构：每帧位置/速度/类型 | `TrackFrame`, `VehicleTrack` |
-| `tools/trace_display.py` | 可视化检验：原始（蓝）vs 吸附（绿） | `main()` |
-| `tools/validate_trace_data.py` | 轨迹质量统计（帧数、时长、跳跃、离群点） | CLI 参数 `--data-file` |
-| `tools/record_spectator_view.py` | 视角保存与恢复 | 按 SPACE 保存 |
+| `TP_DATA_FILE_PATH` | — | 轨迹数据文件 |
+| `TP_DATA_SCALE` | 0.01 | 厘米→米缩放 |
+| `TP_REVERSE_DIRECTION` | True | 数据方向（隧道逆向） |
+| `TP_SNAP_THRESHOLD` | 15.0 | 车道吸附距离（米） |
+
+详细文档见 §4 轨迹复现完整流程。
+
+## 二、隧道仿真与数据集采集（tp_tunnel_traffic）
+
+### 快速开始：GUI 手动采集
+```bat
+call E:\Programs\miniconda\Scripts\activate.bat
+conda activate carla
+cd /d E:\code\track_plot
+
+set TT_GUI_ENABLE=1
+set TT_PROXY_ENABLE=1
+set TT_COLLECT_OUTPUT_DIR=dataset
+
+python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
+```
+
+### 快速开始：批量自动化采集
+```bat
+E:\code\track_plot\run_all_batches.bat
+```
+
+### 核心能力
+- 三车道代理车流（左快中稳右慢，持续补车）
+- 7 相机 RGB 图像 + 7 相机实例分割 PNG
+- COCO 2D 车辆检测框自动标注
+- 控制量标签（steer/throttle/brake + ego state）
+- 全局 COCO 合并（`merge_coco.py`）
+
+### 校验命令
+```bat
+python -m tp_tunnel_traffic.validate_dataset_run --run-dir dataset\proxy_<id>\run_YYYYmmdd_HHMMSS
+python -m tp_tunnel_traffic.tests.test_dataset_vision_outputs --run-dir dataset\proxy_<id>\run_YYYYmmdd_HHMMSS
+python -m tp_tunnel_traffic.merge_coco --dataset-dir dataset
+```
+
+详细文档见 `tp_tunnel_traffic/README.md` 和 `dataset/README.md`。
 
 ---
 
-## 2. 数据格式
+## 2. 数据格式（轨迹复现）
 
 ### 2.1 原始轨迹输入格式
 
@@ -182,9 +221,6 @@ python .\auto_control_main.py
 
 # 方式二：直接调用模块（等效）
 python -m tp_replay.main
-
-# 方式三：兼容旧入口（保留）
-python .\replay_main.py
 ```
 
 回放控制：
@@ -290,88 +326,33 @@ python .\auto_control_main.py
 python .\auto_control_main.py
 ```
 
----
-
-## 7. 隧道三车道与自动驾驶功能
-
-### 7.1 功能目标
-
-- 从 `QingShiLing.xodr` 提取完整三车道轨迹
-- 在隧道场景中绘制左/中/右三条车道线
-- 车辆在中间车道起点生成，并沿中间车道自动驾驶到终点
-- 车辆视角保持第一人称驾驶人视角，并支持运行时热键旋转观察周围环境
-
-### 7.2 主要实现思路
-
-1. `tp_tunnel_traffic/lane_sampling.py`
-   - 读取 OpenDRIVE 的 `planView` 和 `laneSection`
-   - 根据车道宽度与 laneOffset 计算三条车道中心线
-   - 将采样结果转换为 CARLA 坐标系中的 `PathPoint`
-
-2. `tp_tunnel_traffic/control.py`
-   - 使用路径前视点作为目标，避免只追最近点带来的抖动
-   - 对转向进行低通和平滑限制，减少左右摆动
-   - 根据目标速度控制油门，在隧道中保持稳定巡航
-
-3. `tp_tunnel_traffic/main.py`
-   - 生成车辆并设置起始朝向
-   - 持续读取车道采样点，沿中间车道自动驾驶
-   - 使用 spectator 跟随车辆，实现车内第一人称视角
-
-### 7.3 测试入口
-
-- `python -m tp_tunnel_traffic.tests.test_tunnel_lanes`
-  - 只显示三车道车道线
-  - 用于检查三车道是否完整、是否重合、是否从正确方向开始
-
-- `python -m tp_tunnel_traffic.tests.test_tunnel_autodrive`
-  - 运行隧道自动驾驶流程
-  - 用于验证车辆是否能沿中间车道从起点行驶到终点
-
-### 7.4 车内第一人称视角
-
-- 默认视角由 `tp_tunnel_traffic/camera_offsets.json` 提供
-- 运行时可通过热键旋转视角角度：
-  - `[` / `]`：切换视角预设
-  - `0`：恢复正前方
-  - `,` / `.`：左右微调 1 度
+> 如遇问题，先检查 `config.py` 中的默认值与环境变量是否与你的 CARLA 地图/数据匹配。
 
 ---
 
-## 8. 项目现状与后续建议
+## 参考命令汇总
 
-### 7.1 当前保留的功能模块
-
-- `tp_replay/`：核心回放引擎
-- `validate_trace_data.py` + `record_spectator_view.py`：校验与视角工具
-- `tools/`：独立工具集
-- `trace_data/test_data/`：示例轨迹数据
-
-### 7.2 建议的后续改进
-
-1. **配置外部化**：把硬编码路径 (`XODR_PATH`) 移到单独 `config.yaml` 或环境变量
-2. **自动锚点选择**：目前依赖手动 `MANUAL_ROTATION_FIX`，可改进为自动最优角度搜索
-3. **测试覆盖**：增加回归测试（检验吸附率、解析错误率）
-4. **Docker 支持**：封装为容器，方便 CI/CD
-
----
-
-## 9. 参考命令汇总
-
+**轨迹复现**：
 ```powershell
-# 激活 CARLA
 conda activate carla
 cd E:\code\track_plot
-
-# 校验轨迹
-python .\tools\validate_trace_data.py --data-file .\trace_data\test_data\data_6lu2.txt
-
-# 可视化对齐
-python .\tools\trace_display.py
-
-# 回放
 $env:TP_PRESERVE_EXISTING_WORLD='1'
 python .\auto_control_main.py
 ```
 
-> 如遇问题，先检查 `config.py` 中的默认值与环境变量是否与你的 CARLA 地图/数据匹配。
+**隧道仿真 + GUI 采集**：
+```bat
+python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
+```
+
+**批量自动化采集**：
+```bat
+E:\code\track_plot\run_all_batches.bat
+```
+
+**数据集校验**：
+```bat
+python -m tp_tunnel_traffic.validate_dataset_run --run-dir dataset\proxy_<id>\run_YYYYmmdd_HHMMSS
+python -m tp_tunnel_traffic.tests.test_dataset_vision_outputs --run-dir dataset\proxy_<id>\run_YYYYmmdd_HHMMSS
+python -m tp_tunnel_traffic.merge_coco --dataset-dir dataset
+```

@@ -42,15 +42,57 @@
 - 左/右车道由中间车道按常量车道宽度（默认 3.5m，可用环境变量 `TT_LANE_WIDTH_M` 覆盖）平移合成，使三车道始终平行且等间距
 - 负责判断三车道是否有效，并跳过无效/重合段
 
+### `collector.py`
+数据集采集器：
+- 多相机 RGB + 实例分割传感器创建与管理
+- labels.jsonl / COCO 2D 标注 / instance PNG 写盘
+- 2D bbox 投影计算（3D→2D）
+- 采集统计与异常检测
+
+### `config.py`
+全部配置项（`TunnelTrafficConfig`），通过 `TT_*` / `TP_*` 环境变量覆盖。
+
+### `gui.py`
+Pygame GUI 控制台：
+- Overview 自由视角 / Ego 第一人称
+- 代理车列表与选中
+- Collect Selected 采集开关
+
+### `merge_coco.py`
+全局 COCO 合并工具：`python -m tp_tunnel_traffic.merge_coco --dataset-dir dataset`
+
+### `validate_dataset_run.py`
+run 级离线校验：检查 metadata/labels/images 对齐。
+
+
 ### `control.py`
 自动驾驶控制器：
 - 根据当前车辆位置和前视点计算方向
 - 限制转向变化，减少左右抖动
 - 根据目标速度控制油门
 
+### `autopilot.py`
+Traffic Manager 集成：自动导航配置与 TM 参数设置。
+
+### `spawning.py`
+车辆生成与净空判定：代理车在车道点上的约束生成，含 lane-aware 跨车道净空检测。
+
+### `vehicle_plan.py`
+代理车计划生成：按密度/速度/分布生成各车道的车辆蓝图与生成位置。
+
+### 配置文件
+- `dataset_cameras.json`：RGB 相机布局（位姿/分辨率/fov）
+- `camera_offsets.json`：ego 视角微调参数
+
+### `docs/`
+- `DATASET_COLLECTION_DESIGN.md`：数据集采集模块设计文档
+
 ### `tests/`
 - `test_tunnel_lanes.py`：只显示三车道车道线
-- `test_tunnel_autodrive.py`：测试车辆沿中间车道自动驾驶
+- `test_tunnel_autodrive.py`：GUI 手动采集入口
+- `test_auto_collect.py`：无 GUI 批量自动化采集
+- `test_dataset_capture.py`：数据集采集触发入口
+- `test_dataset_vision_outputs.py`：COCO/instance 输出校验
 
 当前“隧道代理车流 + GUI 选车采集”的推荐入口：
 - `python -m tp_tunnel_traffic.tests.test_tunnel_autodrive`

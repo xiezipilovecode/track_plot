@@ -222,6 +222,16 @@ run 级轻量标记文件：
 ### 5.5 actors.json（可选）
 run 级目标 actor 的补充信息（新版本 run 可能包含）。
 
+### 5.6 labels_2d/coco_instances.json（每 run）
+每个 run 独立生成的标准 COCO 格式文件。`file_name` 使用相对路径（相对于 run 目录）。2D 框仅包含车辆（vehicle.*）。
+
+### 5.7 coco_annotations.json（全局合并）
+将全部 run 的 COCO 合并为一个文件，image_id / annotation_id 全局唯一：
+```bat
+python -m tp_tunnel_traffic.merge_coco --dataset-dir dataset
+```
+输出 `dataset/coco_annotations.json`，可直接喂入检测框架。
+
 ---
 
 ## 6. Create the Dataset (采集流程)
@@ -380,20 +390,3 @@ cy = height/2
 
 - **License**: 未声明（建议在发布/共享前补充）
 - **Citation**: 若要在论文/报告引用，建议补充一个 BibTeX 条目（待定）
-### 5.6 labels_2d/coco_instances.json（可选）
-当开启 COCO 输出时，每个 run 会生成独立的 COCO 文件。
-> `file_name` 使用 **相对路径**（相对于 run 目录），例如 `images/ego/000123.png`。
-> 2D 框仅包含车辆（vehicle.*），这是本项目当前目标范围。
-
-### 5.7 coco_annotations.json（全局合并）
-将全部 run 的 COCO 合并为一个文件，image_id / annotation_id 全局唯一：
-```bat
-python -m tp_tunnel_traffic.merge_coco --dataset-dir dataset
-```
-输出 `dataset/coco_annotations.json`，可直接喂入检测框架。
-2D bbox / 实例分割：
-- `TT_COLLECT_ENABLE_INSTANCE_SEGMENTATION=1`（生成 instance PNG）
-- `TT_COLLECT_WRITE_COCO=1`（生成 COCO 2D JSON）
-- `TT_COLLECT_INSTANCE_SUFFIX=_instance`（分割相机后缀）
-- `TT_COLLECT_COCO_MIN_AREA_PX2=200`（过滤过小的 2D 框面积）
-- `TT_COLLECT_COCO_MAX_HEIGHT_RATIO=0.9`（过滤过高的 2D 框，占图像高度比例）

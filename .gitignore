@@ -17,6 +17,7 @@ trace_data/stitched/
 
 # AI Agent
 .sisyphus/
+.claude/
 
 # Dataset (大规模二进制数据，不适合 Git)
 dataset/proxy_*/
