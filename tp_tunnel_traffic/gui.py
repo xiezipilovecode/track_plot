@@ -25,7 +25,7 @@ class TunnelTrafficGUI:
 
         self.width = 1050
         self.height = 680
-        self.panel_h = 86
+        self.panel_h = 110
         
         pygame.init()
         self.display = pygame.display.set_mode((self.width, self.height))
@@ -59,6 +59,8 @@ class TunnelTrafficGUI:
             {"label": "Yaw -", "rect": pygame.Rect(762, 18, 86, 36), "action": "yaw_left", "group": "yaw"},
             {"label": "Reset", "rect": pygame.Rect(858, 18, 86, 36), "action": "yaw_reset", "group": "yaw"},
             {"label": "Yaw +", "rect": pygame.Rect(954, 18, 86, 36), "action": "yaw_right", "group": "yaw"},
+            # Row 2
+            {"label": "HoloLens Stream", "rect": pygame.Rect(272, 62, 170, 36), "action": "toggle_hololens", "group": "hololens"},
         ]
         self.font = pygame.font.SysFont(None, 26)
         self.small_font = pygame.font.SysFont(None, 20)
@@ -173,13 +175,15 @@ class TunnelTrafficGUI:
         collect_proxy_enabled = bool(state.get("collect_proxy_enabled", False))
         selected_proxy_actor_id = state.get("selected_proxy_actor_id")
         video_recording = bool(state.get("video_recording", False))
+        hololens_active = bool(state.get("hololens_active", False))
         target_text = "ego" if selected_proxy_actor_id is None else f"proxy#{int(selected_proxy_actor_id)}"
         mode_text = (
             f"View: {state.get('view_mode', 'ego')}   "
             f"Yaw: {float(state.get('yaw_offset_deg', 0.0)):+.1f}°   "
             f"Target: {target_text}   "
             f"Collect: {'ON' if collect_proxy_enabled else 'OFF'}   "
-            f"Video: {'ON' if video_recording else 'OFF'}"
+            f"Video: {'ON' if video_recording else 'OFF'}   "
+            f"HL: {'ON' if hololens_active else 'OFF'}"
         )
         mode_surf = self.small_font.render(mode_text, True, (210, 220, 235))
         self.display.blit(mode_surf, (18, 59))
@@ -197,6 +201,8 @@ class TunnelTrafficGUI:
                 active = bool(current.get("collect_proxy_enabled", False)) and current.get("selected_proxy_actor_id") is not None
             elif b["group"] == "video":
                 active = bool(current.get("video_recording", False))
+            elif b["group"] == "hololens":
+                active = bool(current.get("hololens_active", False))
             elif b["group"] == "overview":
                 active = False
             elif b["group"] == "yaw":

@@ -23,6 +23,7 @@ from .control import compute_control
 from .vehicle_plan import build_vehicle_plan
 from .collector import DatasetCollector
 from .video_collector import VideoCollector
+from .hololens_server import HoloLensServer
 from .lane_sampling import build_center_lane_path, build_three_lane_paths
 from .spawning import destroy_spawned_actors, try_spawn_vehicle
 from .gui import TunnelTrafficGUI
@@ -284,6 +285,7 @@ def _build_capture_state_provider(
     yaw_offset,
     collect_proxy_enabled: bool,
     video_recording: bool,
+    hololens_active: bool,
     overview_state,
 ):
     return {
@@ -294,6 +296,7 @@ def _build_capture_state_provider(
         "collect_output_by_target": bool(getattr(config, "collect_output_by_target", True)),
         "collect_proxy_enabled": bool(collect_proxy_enabled),
         "video_recording": bool(video_recording),
+        "hololens_active": bool(hololens_active),
         "overview_state": dict(overview_state or {}),
     }
 
@@ -366,6 +369,7 @@ def main():
     spawned = []
     collector = None
     video_collector = None
+    hololens_server = None
     try:
         original_settings = world.get_settings()
         if config.sync_mode:
@@ -608,6 +612,7 @@ def main():
         capture_proxy_state = None
         collect_proxy_enabled = False
         video_recording = False
+        hololens_active = False
         proxy_first_person = True
         start_tf = lane_points[0].transform
         next_tf = lane_points[1].transform
@@ -638,9 +643,10 @@ def main():
                 selected_proxy_actor_id,
                 getattr(_update_camera_yaw_hotkeys, "view_mode", getattr(config, "camera_mode", "ego")),
                 float(getattr(_follow_driver_view, "yaw_offset_deg", 0.0)),
-                    bool(collect_proxy_enabled),
-                    bool(video_recording),
-                    {
+                bool(collect_proxy_enabled),
+                bool(video_recording),
+                bool(hololens_active),
+                {
                     "yaw_deg": overview_yaw_deg,
                     "pitch_deg": overview_pitch_deg,
                     "pos": tuple(overview_pos),
@@ -667,6 +673,11 @@ def main():
         video_collector = VideoCollector(carla, world, config, lane_points) if config.video_enable else None
         if video_collector is not None:
             print(f"视频录制初始化: enabled=OFF, output_base={Path(config.video_output_dir)}")
+
+        # HoloLens server (WebRTC streaming)
+        hololens_server = HoloLensServer(carla, world, config) if config.hololens_enable else None
+        if hololens_server is not None:
+            print(f"HoloLens 推流初始化: port={config.hololens_port}")
 
         def _spawn_proxy_from_plan(plan) -> bool:
             lane_index = int(plan.lane_index)
@@ -956,6 +967,20 @@ def main():
                                 print(f"Record Video: OFF")
                         else:
                             print("Record Video: 忽略（当前未选中代理车）")
+                    elif gui_action == "toggle_hololens":
+                        if hololens_server is None:
+                            print("HoloLens Stream: 未启用（TT_HOLOLENS_ENABLE=0）")
+                        else:
+                            hololens_active = not hololens_active
+                            if hololens_active:
+                                hololens_server.start(capture_vehicle)
+                                if capture_vehicle is not None:
+                                    print(f"HoloLens Stream: ON, target={selected_proxy_actor_id}, port={config.hololens_port}")
+                                else:
+                                    print(f"HoloLens Stream: ON, no target (spectator view), port={config.hololens_port}")
+                            else:
+                                hololens_server.stop()
+                                print("HoloLens Stream: OFF")
                     elif gui_action == "overview_reset":
                         _reset_overview_camera()
                     elif "overview_" in gui_action:
@@ -1034,6 +1059,9 @@ def main():
                                         capture_vehicle,
                                         lane_points=(capture_proxy_state.get("lane_points", lane_points) if capture_proxy_state else lane_points),
                                     )
+                                # HoloLens 推流跟随新目标
+                                if hololens_active and hololens_server is not None:
+                                    hololens_server.set_vehicle(capture_vehicle)
                                 if collector is not None:
                                     try:
                                         target_dir = _target_output_path(config, selected_proxy_actor_id, "proxy")
@@ -1089,6 +1117,10 @@ def main():
                 if video_recording and video_collector is not None:
                     video_collector.stop()
                     video_recording = False
+                if hololens_active and hololens_server is not None:
+                    # Don't stop — detach camera and keep it at current position
+                    hololens_server.set_vehicle(None)
+                    print("HoloLens Stream: 目标车失效，相机保持出口位置")
                 print("Collect Selected: OFF（目标代理车已失效）")
 
             if view_mode == "overview":
@@ -1142,7 +1174,8 @@ def main():
                     getattr(_update_camera_yaw_hotkeys, "view_mode", getattr(config, "camera_mode", "overview")),
                     float(getattr(_follow_driver_view, "yaw_offset_deg", 0.0)),
                     bool(collect_proxy_enabled),
-                bool(video_recording),
+                    bool(video_recording),
+                    bool(hololens_active),
                     {
                         "yaw_deg": overview_yaw_deg,
                         "pitch_deg": overview_pitch_deg,
@@ -1196,6 +1229,8 @@ def main():
             collector.destroy()
         if video_collector is not None:
             video_collector.destroy()
+        if hololens_server is not None:
+            hololens_server.stop()
         destroy_spawned_actors(spawned)
         if original_settings is not None:
             try:

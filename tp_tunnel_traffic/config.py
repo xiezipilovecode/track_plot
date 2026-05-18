@@ -109,6 +109,13 @@ class TunnelTrafficConfig:
     video_frame_stride: int = _env_int("TT_VIDEO_FRAME_STRIDE", 1)
     video_cameras_json: str = _env_str("TT_VIDEO_CAMERAS_JSON", r"tp_tunnel_traffic\dataset_cameras.json")
 
+    # --- HoloLens 2 WebRTC 推流 ---
+    hololens_enable: bool = _env_bool("TT_HOLOLENS_ENABLE", False)
+    hololens_port: int = _env_int("TT_HOLOLENS_PORT", 8765)
+    hololens_res_w: int = _env_int("TT_HOLOLENS_RES_W", 896)
+    hololens_res_h: int = _env_int("TT_HOLOLENS_RES_H", 504)
+    hololens_fps: int = _env_int("TT_HOLOLENS_FPS", 30)
+
     # --- 阶段 B：代理车辆（受约束随机车流）---
     proxy_enable: bool = _env_bool("TT_PROXY_ENABLE", False)
     # 代理车基准速度（m/s），实际每辆车会叠加车道速度分层差异

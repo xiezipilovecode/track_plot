@@ -16,6 +16,7 @@ track_plot/
 │  ├─ main.py                     # 隧道场景主入口
 │  ├─ collector.py                # 帧级数据集采集器（RGB/COCO/instance）
 │  ├─ video_collector.py          # 视频录制器（连续帧 + 压力参数）
+│  ├─ hololens_server.py           # HoloLens 2 WebRTC 推流
 │  ├─ config.py                   # 全部环境变量配置
 │  ├─ control.py                  # 自动驾驶控制器
 │  ├─ lane_sampling.py            # 三车道提取
@@ -350,6 +351,12 @@ python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
 ```bat
 set TT_VIDEO_ENABLE=1
 set TT_VIDEO_OUTPUT_DIR=dataset_video
+python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
+```
+
+**HoloLens 推流**：
+```bat
+set TT_HOLOLENS_ENABLE=1
 python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
 ```
 

@@ -51,9 +51,16 @@
 ### `video_collector.py`
 视频录制器（连续帧）：
 - 7 相机连续帧录制 → `dataset_video/run_*/`
-- 帧级时间戳（timestamps.jsonl）
+- FFmpeg 实时编码 MP4（背景线程异步）
 - 预留驾驶人压力参数接口（driver_stress.jsonl）
 - 通过 GUI `Record Video` 按钮控制启停
+
+### `hololens_server.py`
+HoloLens 2 WebRTC 推流：
+- 将选中代理车驾驶员视角实时推流到 HoloLens 2
+- 接收 HoloLens 头部旋转（yaw/pitch）驱动 CARLA 相机
+- 独立后台线程运行，不影响仿真帧率
+- 通过 GUI `HoloLens Stream` 按钮控制启停
 
 ### `config.py`
 全部配置项（`TunnelTrafficConfig`），通过 `TT_*` / `TP_*` 环境变量覆盖。
@@ -92,7 +99,8 @@ Traffic Manager 集成：自动导航配置与 TM 参数设置。
 
 ### `docs/`
 - `DATASET_COLLECTION_DESIGN.md`：数据集采集模块设计文档
-- `VIDEO_COLLECTION_DESIGN.md`：视频采集模块设计文档（面向驾驶人实时仿真与压力参数采集）
+- `VIDEO_COLLECTION_DESIGN.md`：视频采集模块设计文档
+- `HOLOLENS_INTEGRATION_DESIGN.md`：HoloLens 集成设计文档
 
 ### `tests/`
 - `test_tunnel_lanes.py`：只显示三车道车道线
@@ -175,6 +183,10 @@ python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
 新增采集输出：
 - 实例分割 PNG：默认输出到 `images/<camera>_instance/<frame>.png`
 - COCO 2D 标注：输出到 `labels_2d/coco_instances.json`（仅 vehicle 类）
+
+新增推流输出：
+- HoloLens Stream：GUI 按钮启动 → WebRTC 推流到 HoloLens 2，实时显示驾驶员视角
+- 可通过 `set TT_HOLOLENS_ENABLE=1` 开启（默认端口 8765）
 
 快速验证（COCO/instance 输出）：
 ```bat
@@ -421,6 +433,8 @@ python -m tp_tunnel_traffic.tests.test_auto_collect
 - **Collect Selected**：对当前选中代理车开启/关闭采集
   - ON 时会打印 `output_dir=...run_YYYYmmdd_HHMMSS`
   - 采集中切换选中代理车会自动 OFF，避免串数据
+- **Record Video**：对当前选中代理车开启/关闭视频录制
+- **HoloLens Stream**：启动/停止 HoloLens 2 WebRTC 推流
 
 ## 数据集采集输出结构
 
