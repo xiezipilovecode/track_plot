@@ -57,9 +57,10 @@
 
 ### `hololens_server.py`
 HoloLens 2 WebRTC 推流：
-- 将选中代理车驾驶员视角实时推流到 HoloLens 2
-- 接收 HoloLens 头部旋转（yaw/pitch）驱动 CARLA 相机
-- 独立后台线程运行，不影响仿真帧率
+- 单一世界相机（不绑定车辆），切车时无创建/销毁操作
+- 将选中代理车驾驶员视角实时推流到 HoloLens 2（VideoStreamTrack → WebRTC）
+- 接收 HoloLens 头部旋转（yaw/pitch）驱动 CARLA 相机（DataChannel）
+- 独立后台线程运行 asyncio 事件循环，不影响仿真帧率
 - 通过 GUI `HoloLens Stream` 按钮控制启停
 
 ### `config.py`
@@ -184,8 +185,11 @@ python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
 - 实例分割 PNG：默认输出到 `images/<camera>_instance/<frame>.png`
 - COCO 2D 标注：输出到 `labels_2d/coco_instances.json`（仅 vehicle 类）
 
-新增推流输出：
-- HoloLens Stream：GUI 按钮启动 → WebRTC 推流到 HoloLens 2，实时显示驾驶员视角
+HoloLens 推流：
+- WebRTC VideoTrack 推流（VP8/H264），896×504 @ 30fps
+- 头部姿态通过 WebRTC DataChannel 回传
+- 单一世界相机架构，切车无崩溃
+- GUI 按钮 "HoloLens Stream" 控制启停，跟随选中代理车视角
 - 可通过 `set TT_HOLOLENS_ENABLE=1` 开启（默认端口 8765）
 
 快速验证（COCO/instance 输出）：

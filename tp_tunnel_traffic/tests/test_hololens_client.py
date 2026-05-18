@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-"""Test client for HoloLens WebSocket JPEG streaming.
-
-Connects to HoloLensServer, receives JPEG video frames via WebSocket,
-displays via OpenCV.
+"""WebRTC test client — matches HoloLensSimulator from hololens_websocket_server.py.
 
 Usage:
     python -m tp_tunnel_traffic.tests.test_hololens_client --host 127.0.0.1 --port 8765
@@ -20,67 +17,105 @@ from pathlib import Path
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import numpy as np
-
 
 async def main(host: str, port: int):
     import cv2
+    import numpy as np
     import websockets
+    from aiortc import RTCPeerConnection, RTCSessionDescription
 
     uri = f"ws://{host}:{port}"
     print(f"Connecting to {uri} ...")
-    start_time: float | None = None
-    frames = 0
 
+    pc = RTCPeerConnection()
+    # Create DataChannel BEFORE offer (critical — matches HoloLensSimulator)
+    ctrl = pc.createDataChannel("controls")
+    pc.addTransceiver("video", direction="recvonly")
+
+    # Fake head rotation (same as HoloLensSimulator)
+    @ctrl.on("open")
+    def _on_open():
+        async def send():
+            t = 0.0
+            while True:
+                await asyncio.sleep(0.033)
+                t += 0.05
+                try:
+                    ctrl.send(struct.pack("<ff", float(np.sin(t) * 45.0), float(np.cos(t * 0.5) * 10.0)))
+                except Exception:
+                    break
+        asyncio.ensure_future(send())
+
+    frames = 0
+    start_time: float | None = None
     cv_ok = False
     try:
-        cv2.namedWindow("HoloLens WS Client", cv2.WINDOW_NORMAL)
+        cv2.namedWindow("HoloLens WebRTC", cv2.WINDOW_NORMAL)
         cv_ok = True
     except Exception:
         print("(opencv window not available)")
 
-    try:
-        async with websockets.connect(uri, ping_interval=None) as ws:
-            print("Connected. Waiting for video ...")
+    @pc.on("track")
+    def on_track(track):
+        nonlocal frames, start_time
+        print(f"Track received: kind={track.kind}")
+        if track.kind != "video":
+            return
+
+        async def consume():
+            nonlocal frames, start_time
             start_time = time.time()
-
+            first_saved = False
             while True:
-                msg = await ws.recv()
-
-                if isinstance(msg, str):
-                    # Text = SDP signaling (passed through, logged only)
-                    try:
-                        data = json.loads(msg)
-                        k = data.get("msg", "?")
-                        if k == "sdp":
-                            print(f"  [SIG] {data.get('type','?')}")
-                    except Exception:
-                        pass
-                    continue
-
-                if isinstance(msg, bytes):
-                    # Binary = JPEG frame (4B length + JPEG)
-                    try:
-                        dlen = struct.unpack(">I", msg[:4])[0]
-                        jpeg = msg[4: 4 + dlen]
-                    except Exception:
-                        continue
-
-                    arr = np.frombuffer(jpeg, dtype=np.uint8)
-                    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                    if img is None:
-                        continue
-
+                try:
+                    frame = await track.recv()
                     frames += 1
+                    if frames == 1:
+                        # Diagnostic: check pixel values and save first frame
+                        img = frame.to_ndarray(format="bgr24")
+                        mean_val = img.mean()
+                        print(f"  [DIAG] first frame: shape={img.shape}, mean={mean_val:.1f}", flush=True)
+                        if mean_val < 10:
+                            print("  [DIAG] WARNING: frame is nearly BLACK (mean < 10)", flush=True)
+                        elif 120 < mean_val < 136:
+                            print("  [DIAG] WARNING: frame is nearly GRAY (mean ~128) — fallback frame?", flush=True)
+                        else:
+                            print(f"  [DIAG] frame looks OK (mean={mean_val:.1f})", flush=True)
+                        import cv2
+                        cv2.imwrite("_test_frame.png", img)
+                        print("  [DIAG] saved _test_frame.png — open it to check visually", flush=True)
+                        first_saved = True
                     if frames % 30 == 1:
                         e = time.time() - start_time
                         fps = frames / e if e > 0 else 0
-                        print(f"  frame #{frames:>4d}  fps={fps:5.1f}  size={len(jpeg):>5d}B")
+                        print(f"  frame #{frames:>4d}  fps={fps:.1f}  {frame.width}x{frame.height}")
+                    if cv_ok and frames > 1:
+                        img2 = frame.to_ndarray(format="bgr24")
+                        cv2.imshow("HoloLens WebRTC", img2)
+                        cv2.waitKey(1)
+                except Exception as ex:
+                    print(f"Frame error: {ex}")
+                    break
 
-                    if cv_ok:
-                        cv2.imshow("HoloLens WS Client", img)
-                        if cv2.waitKey(1) & 0xFF == ord("q"):
-                            break
+        asyncio.ensure_future(consume())
+
+    try:
+        async with websockets.connect(uri, ping_interval=None) as ws:
+            print("WebSocket connected")
+            offer = await pc.createOffer()
+            await pc.setLocalDescription(offer)
+            await ws.send(json.dumps({"msg": "sdp", "type": "offer", "sdp": pc.localDescription.sdp}))
+            print("Offer sent")
+
+            async for msg in ws:
+                d = json.loads(msg)
+                if d.get("msg") == "sdp" and d.get("type") == "answer":
+                    await pc.setRemoteDescription(RTCSessionDescription(sdp=d["sdp"], type="answer"))
+                    print("Answer received — waiting for video...")
+                    break
+
+            while True:
+                await asyncio.sleep(1)
 
     except Exception as e:
         print(f"Error: {e}")

@@ -6,399 +6,292 @@ import logging
 import struct
 import threading
 import time
-from pathlib import Path
-from typing import Any
+from fractions import Fraction
 
-import cv2
 import numpy as np
 
-# Ensure track is recognized by aiortc
 try:
-    from aiortc import MediaStreamTrack
+    from aiortc import VideoStreamTrack
 except ImportError:
-    MediaStreamTrack = object  # type: ignore[assignment,misc]
+    VideoStreamTrack = object
 
 logger = logging.getLogger("HoloLensServer")
 
+# Shared frame buffer
+_HOLO_FRAME = None
+_HOLO_ROTATION = {"yaw": 0.0, "pitch": 0.0}
+_HOLO_ROTATION_LOCK = threading.Lock()
 
-# ------------------------------------------------------------------
-#  HoloLensVideoTrack  — 将 CARLA 相机帧封装为 WebRTC VideoTrack
-# ------------------------------------------------------------------
 
-class HoloLensVideoTrack(MediaStreamTrack):
-    """aiortc VideoStreamTrack — pulls frames from a shared CARLA camera buffer.
-
-    Frames are fed from the CARLA sensor callback (main thread) via
-    :meth:`feed_frame` and consumed by aiortc's RTCRtpSender via
-    :meth:`recv`.
-    """
-
+class HoloLensVideoTrack(VideoStreamTrack):
     kind = "video"
 
-    def __init__(self, fps: int = 30):
+    def __init__(self, width=896, height=504, fps=30):
         super().__init__()
+        self._w, self._h = width, height
         self._fps = max(1, fps)
-        self._latest_bytes: bytes | None = None
-        self._latest_lock = threading.Lock()
-        self._frame_count = 0
-        self._start_time: float | None = None
+        self._fc = 0
+        self._start: float | None = None
         self._pts_step = 90000 // self._fps
-        self._width = 0
-        self._height = 0
-        self._fed_count = 0  # debug: frames received from CARLA
-        self._sent_count = 0  # debug: frames returned by recv()
-        self._sent_with_data = 0  # debug: recv calls that had real data
-
-    @property
-    def readyState(self) -> str:
-        return "live"
-
-    @property
-    def width(self) -> int:
-        return self._width
-
-    @property
-    def height(self) -> int:
-        return self._height
-
-    def configure(self, width: int, height: int) -> None:
-        self._width = width
-        self._height = height
-
-    def feed_frame(self, raw_data: bytes) -> None:
-        """Called from CARLA sensor callback (main thread). Thread-safe."""
-        with self._latest_lock:
-            self._latest_bytes = bytes(raw_data)
-        self._fed_count += 1
 
     async def recv(self):
         from av import VideoFrame
 
-        # Rate-limit to ~30 fps so the encoder doesn't flood
-        await asyncio.sleep(1.0 / max(1, self._fps))
+        now = time.time()
+        if self._start is None:
+            self._start = now
+        target = self._start + self._fc / self._fps
+        wait = target - now
+        if self._fc % 100 == 0 and abs(wait) > 0.5:
+            self._start = now - self._fc / self._fps
+            wait = 0
+        if wait > 0.001:
+            await asyncio.sleep(wait)
 
-        self._sent_count += 1
-        with self._latest_lock:
-            data = self._latest_bytes
-        if self._sent_count % 100 == 1:
-            has_data = data is not None and len(data) > 0
-            if has_data:
-                self._sent_with_data += 1
-            print(f"[HoloLens] recv() #{self._sent_count}: has_data={has_data}, "
-                  f"fed={self._fed_count}, sent_with_data={self._sent_with_data}")
-
-        if data is None or len(data) == 0:
-            arr = np.full((self._height or 504, self._width or 896, 3), 128, dtype=np.uint8)
-            frame = VideoFrame.from_ndarray(arr, format="rgb24")
-        else:
-            h = self._height or 504
-            w = self._width or 896
+        data = _HOLO_FRAME
+        if data is not None:
             try:
-                arr = np.frombuffer(data, dtype=np.uint8).reshape((h, w, 4))
-            except ValueError:
-                arr = np.full((h, w, 4), 128, dtype=np.uint8)
-            rgb = arr[:, :, :3][:, :, ::-1]  # BGRA → RGB
-            frame = VideoFrame.from_ndarray(np.ascontiguousarray(rgb), format="rgb24")
-
-        self._frame_count += 1
-        frame.pts = self._frame_count * self._pts_step
-        frame.time_base = 1 / 90000
+                arr = np.frombuffer(data, dtype=np.uint8).reshape((self._h, self._w, 4))
+                rgb = arr[:, :, :3][:, :, ::-1]
+                frame = VideoFrame.from_ndarray(np.ascontiguousarray(rgb), format="rgb24")
+            except Exception:
+                frame = VideoFrame.from_ndarray(
+                    np.full((self._h, self._w, 3), 128, dtype=np.uint8), format="rgb24")
+        else:
+            frame = VideoFrame.from_ndarray(
+                np.full((self._h, self._w, 3), 128, dtype=np.uint8), format="rgb24")
+        self._fc += 1
+        frame.pts = self._fc * self._pts_step
+        frame.time_base = Fraction(1, 90000)
         return frame
 
 
-# ------------------------------------------------------------------
-#  HoloLensServer  — 管理 WebRTC 连接、信令、相机
-# ------------------------------------------------------------------
-
 class HoloLensServer:
-    """WebRTC streaming server for HoloLens 2.
-
-    - Shares the main process's CARLA client/world.
-    - Manages a dedicated ego camera on the selected proxy vehicle.
-    - Runs asyncio event loop in a background thread (non-blocking).
-    """
+    """WebRTC streaming with a SINGLE world camera — no create/destroy on switch."""
 
     def __init__(self, carla, world, config) -> None:
         self.carla = carla
         self.world = world
         self.config = config
-        self.port: int = int(getattr(config, "hololens_port", 8765))
-        self.res_w: int = int(getattr(config, "hololens_res_w", 896))
-        self.res_h: int = int(getattr(config, "hololens_res_h", 504))
-        self.fps: int = int(getattr(config, "hololens_fps", 30))
-
+        self.port = int(getattr(config, "hololens_port", 8765))
+        self.res_w = int(getattr(config, "hololens_res_w", 896))
+        self.res_h = int(getattr(config, "hololens_res_h", 504))
+        self.fps = int(getattr(config, "hololens_fps", 30))
         self._running = False
-        self._vehicle = None
-        self._camera_sensor = None
-        self._track = HoloLensVideoTrack(self.fps)
-        self._latest_rotation = {"yaw": 0.0, "pitch": 0.0}
-        self._rotation_lock = threading.Lock()
+        self._vehicle = None  # current target vehicle (set by GUI)
+        self._camera = None   # spawned ONCE, never destroyed
         self._thread: threading.Thread | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
 
-        # WebSocket JPEG streaming (scheme A: video via WS, controls via WebRTC)
-        self._ws_clients: list = []
-        self._latest_jpeg: bytes | None = None
-        self._jpeg_lock = threading.Lock()
-        self._jpeg_quality: int = 70
-
-    # ------------------------------------------------------------------
-    #  public API (called from main thread)
-    # ------------------------------------------------------------------
-
+    # ---- public ----
     def start(self, vehicle=None) -> None:
-        """Begin streaming. If no vehicle, uses a world-fixed spectator camera."""
         if self._running:
             return
         self._vehicle = vehicle
         self._running = True
-        self._spawn_camera()
-        self._thread = threading.Thread(target=self._thread_loop, daemon=True)
+        self._spawn_camera_once()
+        self._thread = threading.Thread(target=self._bg_loop, daemon=True)
         self._thread.start()
-        logger.info("HoloLensServer started on port %d", self.port)
+        logger.info("HoloLensServer started (port %d)", self.port)
 
     def stop(self) -> None:
-        """Stop streaming and clean up."""
+        global _HOLO_FRAME
         self._running = False
+        _HOLO_FRAME = None
         self._destroy_camera()
-        if self._thread is not None:
+        if self._thread:
             self._thread.join(timeout=5.0)
-        logger.info("HoloLensServer stopped")
 
     def set_vehicle(self, vehicle) -> None:
-        """Re-target the stream to a different proxy vehicle.
-
-        If ``vehicle`` is None, the camera is re-spawned at its current
-        world position (detached mode) rather than being destroyed.
-        """
+        """Switch camera to follow a different vehicle.  No create/destroy."""
         if self._vehicle is vehicle:
             return
-        # Remember the current camera's world transform before destroying
-        last_tf = None
-        if self._camera_sensor is not None:
-            try:
-                last_tf = self._camera_sensor.get_transform()
-            except Exception:
-                pass
-        self._destroy_camera()
         self._vehicle = vehicle
-        if self._running:
-            if vehicle is None and last_tf is not None:
-                self._spawn_camera_at(last_tf)
-            elif vehicle is not None:
-                self._spawn_camera()
+        # That's it — the callback reads self._vehicle live
 
-    def _spawn_camera_at(self, world_transform) -> None:
-        """Spawn a world-fixed camera at the given transform."""
-        bp_lib = self.world.get_blueprint_library()
-        camera_bp = bp_lib.find("sensor.camera.rgb")
-        camera_bp.set_attribute("image_size_x", str(self.res_w))
-        camera_bp.set_attribute("image_size_y", str(self.res_h))
-        camera_bp.set_attribute("fov", "90")
-        self._camera_sensor = self.world.spawn_actor(camera_bp, world_transform)
-        self._track.configure(self.res_w, self.res_h)
-        self._listen_camera()
+    def pre_tick(self) -> None:
+        """Position camera BEFORE world.tick() — zero-lag.
 
-    def feed_frame(self, raw_data: bytes) -> None:
-        """Deliver latest camera frame to the WebRTC track."""
-        self._track.feed_frame(raw_data)
+        Must be called from main thread before each world.tick().
+        """
+        v = self._vehicle
+        cam = self._camera
+        if v is None or cam is None or not v.is_alive:
+            return
+        try:
+            vt = v.get_transform()
+            with _HOLO_ROTATION_LOCK:
+                y = float(_HOLO_ROTATION["yaw"])
+                p = float(_HOLO_ROTATION["pitch"])
+            fwd_m, right_m, up_m = self._driver_offset(v)
+            fwd = vt.get_forward_vector()
+            right = vt.get_right_vector()
+            cam.set_transform(self.carla.Transform(
+                self.carla.Location(
+                    vt.location.x + fwd.x * fwd_m - right.x * abs(right_m),
+                    vt.location.y + fwd.y * fwd_m - right.y * abs(right_m),
+                    vt.location.z + up_m,
+                ),
+                self.carla.Rotation(
+                    pitch=vt.rotation.pitch - p,
+                    yaw=vt.rotation.yaw + y,
+                    roll=0.0,
+                ),
+            ))
+        except Exception:
+            pass
 
-    def update_rotation(self, yaw: float, pitch: float) -> None:
-        """Update head rotation from HoloLens DataChannel."""
-        with self._rotation_lock:
-            self._latest_rotation["yaw"] = float(yaw)
-            self._latest_rotation["pitch"] = float(pitch)
+    def destroy(self) -> None:
+        self.stop()
 
-    # ------------------------------------------------------------------
-    #  camera management (main thread, called from start/set_vehicle)
-    # ------------------------------------------------------------------
+    # ---- camera (created ONCE) ----
+    # Driver seat offsets per vehicle type (meters: forward, right, up)
+    _DRIVER_OFFSETS = {
+        # Default (fallback)
+        "default":               (0.65, -0.18, 1.22),
+        # Sedans / compact cars
+        "audi.etron":            (0.65, -0.18, 1.22),
+        "audi.a2":               (0.60, -0.16, 1.18),
+        "bmw":                   (0.65, -0.18, 1.20),
+        "citroen":               (0.60, -0.16, 1.18),
+        "ford.crown":            (0.65, -0.18, 1.25),
+        "ford.mustang":          (0.65, -0.20, 1.15),
+        "lincoln.mkz":           (0.68, -0.18, 1.22),
+        "mercedes.coupe":        (0.65, -0.20, 1.15),
+        "mercedes.sprinter":     (0.70, -0.22, 1.65),
+        "mini.cooper":           (0.55, -0.16, 1.15),
+        "nissan.micra":          (0.58, -0.16, 1.18),
+        "nissan.patrol":         (0.70, -0.20, 1.50),
+        "seat.leon":             (0.62, -0.17, 1.20),
+        "tesla.model3":          (0.65, -0.18, 1.20),
+        "toyota.prius":          (0.62, -0.17, 1.22),
+        # SUVs
+        "jeep":                  (0.68, -0.20, 1.45),
+        "landrover":             (0.70, -0.20, 1.50),
+        "range":                 (0.70, -0.20, 1.50),
+        # Trucks / vans
+        "carlamotors":           (0.75, -0.22, 1.70),
+        "volkswagen.t2":         (0.65, -0.20, 1.35),
+    }
 
-    def _spawn_camera(self) -> None:
-        bp_lib = self.world.get_blueprint_library()
-        camera_bp = bp_lib.find("sensor.camera.rgb")
-        camera_bp.set_attribute("image_size_x", str(self.res_w))
-        camera_bp.set_attribute("image_size_y", str(self.res_h))
-        camera_bp.set_attribute("fov", "90")
+    def _driver_offset(self, vehicle) -> tuple:
+        """Return (forward_m, right_m, up_m) for the given vehicle blueprint."""
+        if vehicle is None:
+            return (0.65, -0.18, 1.22)
+        try:
+            tid = str(vehicle.type_id).removeprefix("vehicle.").lower()
+        except Exception:
+            return self._DRIVER_OFFSETS["default"]
+        # Match by prefix (e.g. "vehicle.audi.etron" → "audi.etron", then match "audi")
+        for key in sorted(self._DRIVER_OFFSETS, key=lambda x: -len(x)):
+            if key == "default":
+                continue
+            if tid.startswith(key):
+                return self._DRIVER_OFFSETS[key]
+        return self._DRIVER_OFFSETS["default"]
+    def _spawn_camera_once(self) -> None:
+        bp = self.world.get_blueprint_library().find("sensor.camera.rgb")
+        bp.set_attribute("image_size_x", str(self.res_w))
+        bp.set_attribute("image_size_y", str(self.res_h))
+        bp.set_attribute("fov", "90")
+        # World camera at spectator position — not attached to any vehicle
+        self._camera = self.world.spawn_actor(bp, self.world.get_spectator().get_transform())
+        self._listen()
 
-        if self._vehicle is not None and self._vehicle.is_alive:
-            # Attach to selected proxy vehicle (driver's seat view)
-            transform = self.carla.Transform(
-                self.carla.Location(0.65, -0.18, 1.22),
-                self.carla.Rotation(pitch=-7.5, yaw=0.0, roll=0.0),
-            )
-            self._camera_sensor = self.world.spawn_actor(
-                camera_bp, transform, attach_to=self._vehicle
-            )
-        else:
-            # No vehicle selected → use world spectator position
-            spectator = self.world.get_spectator()
-            sp_tf = spectator.get_transform()
-            self._camera_sensor = self.world.spawn_actor(
-                camera_bp, sp_tf
-            )
-        self._track.configure(self.res_w, self.res_h)
-        self._listen_camera()
+    def _listen(self) -> None:
+        global _HOLO_FRAME
+        count = 0
 
-    def _listen_camera(self) -> None:
-        """Attach the frame-feed listener to the current camera sensor."""
-        rotation_lock = self._rotation_lock
-        latest_rotation = self._latest_rotation
-        camera_sensor_ref = self._camera_sensor
-        track_ref = self._track
-        carla_ref = self.carla
-        attached = self._vehicle is not None and self._vehicle.is_alive
-        fed = [0]  # mutable counter for closure
-        jpeg_q = int(self._jpeg_quality)
-        jpeg_lock = self._jpeg_lock
+        def _cb(image):
+            nonlocal count
+            global _HOLO_FRAME
+            # Just store frame — camera position already set by pre_tick()
+            _HOLO_FRAME = image.raw_data
+            count += 1
+            if count % 200 == 1:
+                print(f"[HoloLens] camera OK ({count})")
 
-        def _on_image(image):
-            # Update camera transform with latest rotation (attached mode only)
-            if attached:
-                try:
-                    with rotation_lock:
-                        yaw = float(latest_rotation.get("yaw", 0.0))
-                        pitch = float(latest_rotation.get("pitch", 0.0))
-                    camera_sensor_ref.set_transform(carla_ref.Transform(
-                        carla_ref.Location(0.65, -0.18, 1.22),
-                        carla_ref.Rotation(pitch=float(-pitch), yaw=float(yaw), roll=0.0),
-                    ))
-                except Exception:
-                    pass
-            # Feed raw bytes to track  (WebRTC, kept for future)
-            track_ref.feed_frame(image.raw_data)
-            # Encode JPEG for WebSocket streaming
-            try:
-                arr = np.frombuffer(image.raw_data, dtype=np.uint8).reshape(
-                    (image.height, image.width, 4))
-                ok, jpeg = cv2.imencode(".jpg", arr[:, :, :3],
-                                         [cv2.IMWRITE_JPEG_QUALITY, jpeg_q])
-                if ok:
-                    data = jpeg.tobytes()
-                    header = struct.pack(">I", len(data))
-                    with jpeg_lock:
-                        self._latest_jpeg = header + data  # store in self
-            except Exception:
-                pass
-            fed[0] += 1
-            if fed[0] % 200 == 1:
-                print(f"[HoloLens] camera callback OK (frame #{fed[0]})")
-
-        self._camera_sensor.listen(_on_image)
-        logger.info("Camera sensor listening (res=%dx%d)", self.res_w, self.res_h)
+        self._camera.listen(_cb)
+        print(f"[HoloLens] camera listening ({self.res_w}x{self.res_h})")
 
     def _destroy_camera(self) -> None:
-        if self._camera_sensor is not None:
+        global _HOLO_FRAME
+        _HOLO_FRAME = None
+        if self._camera is not None:
             try:
-                self._camera_sensor.stop()
+                self._camera.destroy()
             except Exception:
                 pass
-            try:
-                self._camera_sensor.destroy()
-            except Exception:
-                pass
-            self._camera_sensor = None
+            self._camera = None
 
-    # ------------------------------------------------------------------
-    #  WebRTC + WebSocket signalling (background thread)
-    # ------------------------------------------------------------------
-
-    def _thread_loop(self) -> None:
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
+    # ---- asyncio background thread ----
+    def _bg_loop(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            self._loop.run_until_complete(self._serve())
+            loop.run_until_complete(self._serve())
         except Exception:
-            logger.exception("HoloLens server loop error")
+            logger.exception("server loop error")
         finally:
-            self._loop.close()
+            loop.close()
 
     async def _serve(self) -> None:
         import websockets
         from aiortc import RTCPeerConnection, RTCSessionDescription
         from aiortc.sdp import candidate_from_sdp
 
-        async def handler(websocket):
-            # Register client for JPEG broadcasting
-            self._ws_clients.append(websocket)
+        rw, rh, fps = self.res_w, self.res_h, self.fps
 
-            # ---- WebRTC (controls via DataChannel, kept for compatibility) ----
+        async def handler(websocket):
             pc = RTCPeerConnection()
-            pc.addTrack(self._track)
+            pc.addTrack(HoloLensVideoTrack(rw, rh, fps))
 
             @pc.on("datachannel")
-            def _on_datachannel(channel):
-                @channel.on("message")
-                def _on_message(message):
-                    if isinstance(message, bytes) and len(message) == 8:
+            def _dc(ch):
+                @ch.on("message")
+                def _msg(m):
+                    if isinstance(m, bytes) and len(m) == 8:
                         try:
-                            yaw, pitch_val = struct.unpack("<ff", message)
-                            self.update_rotation(yaw, pitch_val)
+                            y, p = struct.unpack("<ff", m)
+                            with _HOLO_ROTATION_LOCK:
+                                _HOLO_ROTATION["yaw"] = float(y)
+                                _HOLO_ROTATION["pitch"] = float(p)
                         except Exception:
                             pass
 
             @pc.on("connectionstatechange")
-            async def _on_state():
+            async def _cs():
                 if pc.connectionState in ("failed", "closed"):
                     await pc.close()
 
-            # ---- Run JPEG broadcaster + WebRTC signaling concurrently ----
-            async def broadcast_jpeg():
-                """Push latest JPEG to this client at ~30fps."""
-                jpeg_lock = self._jpeg_lock
-                while self._running:
-                    with jpeg_lock:
-                        data = self._latest_jpeg
-                    if data is not None:
-                        try:
-                            await websocket.send(data)
-                        except Exception:
-                            break
-                    await asyncio.sleep(0.033)  # ~30 fps
-
-            broadcaster = asyncio.ensure_future(broadcast_jpeg())
-
             try:
-                async for message in websocket:
+                async for msg in websocket:
                     try:
-                        data = json.loads(message)
+                        d = json.loads(msg)
                     except Exception:
                         continue
-                    msg_type = data.get("msg")
-                    if msg_type == "sdp":
-                        sdp_str = data.get("sdp", "")
-                        sdp_type = data.get("type", "")
-                        offer = RTCSessionDescription(sdp=sdp_str, type=sdp_type)
-                        await pc.setRemoteDescription(offer)
-                        if offer.type == "offer":
-                            answer = await pc.createAnswer()
-                            await pc.setLocalDescription(answer)
-                            await websocket.send(json.dumps({
-                                "msg": "sdp",
-                                "type": "answer",
-                                "sdp": pc.localDescription.sdp,
-                            }))
-                    elif msg_type == "ice":
-                        candidate_str = data.get("candidate", "")
-                        sdpMid = data.get("sdpMid", "0")
-                        sdpMLineIndex = data.get("sdpMlineIndex", 0)
-                        if candidate_str:
-                            if "candidate:" in candidate_str:
-                                candidate_str = candidate_str.split(":", 1)[1]
+                    mt = d.get("msg")
+                    if mt == "sdp":
+                        s = RTCSessionDescription(sdp=d.get("sdp", ""), type=d.get("type", ""))
+                        await pc.setRemoteDescription(s)
+                        if s.type == "offer":
+                            a = await pc.createAnswer()
+                            await pc.setLocalDescription(a)
+                            await websocket.send(json.dumps({"msg": "sdp", "type": "answer", "sdp": pc.localDescription.sdp}))
+                    elif mt == "ice":
+                        cs = d.get("candidate", "")
+                        if cs:
+                            if "candidate:" in cs:
+                                cs = cs.split(":", 1)[1]
                             try:
-                                ice = candidate_from_sdp(candidate_str)
-                                ice.sdpMid = sdpMid
-                                ice.sdpMLineIndex = sdpMLineIndex
+                                ice = candidate_from_sdp(cs)
+                                ice.sdpMid = d.get("sdpMid", "0")
+                                ice.sdpMLineIndex = d.get("sdpMlineIndex", 0)
                                 await pc.addIceCandidate(ice)
                             except Exception:
                                 pass
             except Exception:
                 pass
             finally:
-                broadcaster.cancel()
-                try:
-                    self._ws_clients.remove(websocket)
-                except ValueError:
-                    pass
                 await pc.close()
 
         async with websockets.serve(handler, "0.0.0.0", self.port, ping_interval=None):

@@ -1098,6 +1098,10 @@ def main():
             if debug_ticks < 5:
                 debug_ticks += 1
 
+            # HoloLens camera: position BEFORE tick for zero-lag
+            if hololens_active and hololens_server is not None:
+                hololens_server.pre_tick()
+
             world.tick()
             collect_tick_idx += 1
 
@@ -1118,9 +1122,9 @@ def main():
                     video_collector.stop()
                     video_recording = False
                 if hololens_active and hololens_server is not None:
-                    # Don't stop — detach camera and keep it at current position
-                    hololens_server.set_vehicle(None)
-                    print("HoloLens Stream: 目标车失效，相机保持出口位置")
+                    # Vehicle died — let server handle it gracefully
+                    # (old camera already destroyed by CARLA, new one spawned above)
+                    pass
                 print("Collect Selected: OFF（目标代理车已失效）")
 
             if view_mode == "overview":

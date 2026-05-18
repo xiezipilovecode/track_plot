@@ -19,9 +19,7 @@
 
 | 文件 | 用途 | 运行命令 |
 |---|---|---|
-| `test_hololens_client.py` | WebSocket JPEG 测试客户端，连接推流服务端并显示 OpenCV 画面 | `python -m tp_tunnel_traffic.tests.test_hololens_client` |
-| `test_ws_jpeg_stream.py` | WebSocket JPEG 自包含验证（服务端+客户端同进程，不依赖 CARLA） | `python tp_tunnel_traffic\tests\test_ws_jpeg_stream.py` |
-| `HoloLens_WebSocket_CSharp.cs` | HoloLens C# 客户端适配代码（方案 A：WS 收视频 + WebRTC 发姿态） | 复制到 Unity 项目中使用 |
+| `test_hololens_client.py` | WebRTC 测试客户端，连接推流服务端，OpenCV 显示画面 | `python -m tp_tunnel_traffic.tests.test_hololens_client` |
 
 ## 测试流程建议
 

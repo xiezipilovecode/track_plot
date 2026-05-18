@@ -57,7 +57,7 @@ class CarlaVideoTrack(VideoStreamTrack):
         # 理论上这一帧应该发送的时间点
         target_time = self.start_time + (self.frame_count * (1 / self.fps))
         wait_time = target_time - current_time
-
+        
         # [新增] 防漂移机制：每 100 帧检查一次时间误差
         if self.frame_count % 100 == 0:
             # 如果误差超过 0.5秒 (说明系统变慢了或者时钟漂移了)
@@ -92,17 +92,37 @@ def setup_carla():
     logger.info(">>> Connecting to Carla...")
     try:
         client = carla.Client('localhost', 2000)
-        client.set_timeout(5.0)
+        client.set_timeout(30.0)
+
+        # 直接生成隧道地图（跳过可能损坏的旧世界）
+        logger.info(">>> Loading QingShiLing map ...")
+        xodr_path = r"E:\carla\Unreal\CarlaUE4\Content\Carla\OpenDrive\QingShiLing.xodr"
+        with open(xodr_path, "r", encoding="utf-8") as f:
+            xodr = f.read()
+        client.generate_opendrive_world(xodr)
         world = client.get_world()
+        logger.info(">>> Map loaded.")
 
         # 清理
         client.apply_batch([carla.command.DestroyActor(x) for x in world.get_actors().filter("vehicle.*")])
         client.apply_batch([carla.command.DestroyActor(x) for x in world.get_actors().filter("sensor.*")])
 
-        # 生成车辆
+        # 生成车辆 — 优先已有车辆，否则在隧道入口生成
         bp_lib = world.get_blueprint_library()
-        vehicle = world.spawn_actor(bp_lib.filter('model3')[0], world.get_map().get_spawn_points()[0])
-        vehicle.set_autopilot(True)
+        existing = list(world.get_actors().filter("vehicle.*"))
+        if existing:
+            vehicle = existing[0]
+            logger.info(f">>> Using existing vehicle: {vehicle.type_id}")
+        else:
+            bp = bp_lib.filter('model3')[0]
+            # 隧道入口位置
+            tunnel_tf = carla.Transform(
+                carla.Location(x=6.0, y=-672.0, z=1.2),
+                carla.Rotation(yaw=0.0)
+            )
+            vehicle = world.spawn_actor(bp, tunnel_tf)
+            vehicle.set_autopilot(True)
+            logger.info(f">>> Spawned vehicle at tunnel entry")
 
         # 生成摄像头
         camera_bp = bp_lib.find('sensor.camera.rgb')
