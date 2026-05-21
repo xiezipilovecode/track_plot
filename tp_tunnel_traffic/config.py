@@ -60,7 +60,7 @@ class TunnelTrafficConfig:
     debug_points: bool = _env_bool("TT_DEBUG_POINTS", False)
     debug_draw: bool = _env_bool("TT_DEBUG_DRAW", False)
     debug_limit: int = _env_int("TT_DEBUG_LIMIT", 25)
-    camera_mode: str = _env_str("TT_CAMERA_MODE", "ego")
+    camera_mode: str = _env_str("TT_CAMERA_MODE", "overview")
 
     # --- 单车中车道(-2)跟随控制调参 ---
     # 目标点前视距离（米），用于避免“追最近点”造成来回修正
@@ -76,7 +76,7 @@ class TunnelTrafficConfig:
     camera_tune_json: str = _env_str("TT_CAMERA_TUNE_JSON", r"tp_tunnel_traffic\camera_offsets.json")
 
     # --- 数据集采集（Phase A）---
-    gui_enable: bool = _env_bool("TT_GUI_ENABLE", False)
+    gui_enable: bool = _env_bool("TT_GUI_ENABLE", True)
     collect_enable: bool = _env_bool("TT_COLLECT_ENABLE", False)
     # 默认输出到项目根目录下的 dataset/
     collect_output_dir: str = _env_str("TT_COLLECT_OUTPUT_DIR", r"dataset")
@@ -104,50 +104,46 @@ class TunnelTrafficConfig:
     auto_collect_output_batch_dir: str = _env_str("TT_AUTO_COLLECT_OUTPUT_BATCH_DIR", "dataset")
 
     # --- 视频录制（驾驶人实时仿真）---
-    video_enable: bool = _env_bool("TT_VIDEO_ENABLE", False)
+    video_enable: bool = _env_bool("TT_VIDEO_ENABLE", True)
     video_output_dir: str = _env_str("TT_VIDEO_OUTPUT_DIR", r"dataset_video")
     video_frame_stride: int = _env_int("TT_VIDEO_FRAME_STRIDE", 1)
     video_cameras_json: str = _env_str("TT_VIDEO_CAMERAS_JSON", r"tp_tunnel_traffic\dataset_cameras.json")
 
     # --- HoloLens 2 WebRTC 推流 ---
-    hololens_enable: bool = _env_bool("TT_HOLOLENS_ENABLE", False)
+    hololens_enable: bool = _env_bool("TT_HOLOLENS_ENABLE", True)
     hololens_port: int = _env_int("TT_HOLOLENS_PORT", 8765)
     hololens_res_w: int = _env_int("TT_HOLOLENS_RES_W", 896)
     hololens_res_h: int = _env_int("TT_HOLOLENS_RES_H", 504)
     hololens_fps: int = _env_int("TT_HOLOLENS_FPS", 30)
 
-    # --- 阶段 B：代理车辆（受约束随机车流）---
-    proxy_enable: bool = _env_bool("TT_PROXY_ENABLE", False)
-    # 代理车基准速度（m/s），实际每辆车会叠加车道速度分层差异
-    proxy_base_speed_mps: float = _env_float("TT_PROXY_BASE_SPEED_MPS", 12.0)
-    proxy_min_per_lane: int = _env_int("TT_PROXY_MIN_PER_LANE", 4)
-    proxy_max_per_lane: int = _env_int("TT_PROXY_MAX_PER_LANE", 8)
-    # 隧道内巡航一般更稳定：默认让代理车比目标基准速度慢 5%~12% 左右
+    # --- 隧道代理车流（真实隧道参数）---
+    # 中国高速公路隧道：限速 60~80 km/h，车距 2~3 秒，高峰流量 1500~2000 辆/车道/小时
+    proxy_enable: bool = _env_bool("TT_PROXY_ENABLE", True)
+    proxy_base_speed_mps: float = _env_float("TT_PROXY_BASE_SPEED_MPS", 18.0)       # ~65 km/h
+    proxy_min_per_lane: int = _env_int("TT_PROXY_MIN_PER_LANE", 7)                  # 高密度
+    proxy_max_per_lane: int = _env_int("TT_PROXY_MAX_PER_LANE", 14)                 # 高峰流量
     proxy_speed_diff_percent: float = _env_float("TT_PROXY_SPEED_DIFF_PERCENT", 8.0)
-    proxy_follow_distance_m: float = _env_float("TT_PROXY_FOLLOW_DISTANCE_M", 10.0)
-    proxy_spawn_clearance_m: float = _env_float("TT_PROXY_SPAWN_CLEARANCE_M", 12.0)
-    # 代理车生成净空判定是否按车道方向分解（推荐三车道密集生成时开启）
-    # - 同车道：按纵向距离约束，避免追尾/扎堆
-    # - 跨车道：仅使用更小的径向净空，降低相邻车道互相阻塞导致大量 spawn 失败
+    proxy_follow_distance_m: float = _env_float("TT_PROXY_FOLLOW_DISTANCE_M", 16.0)
+    proxy_spawn_clearance_m: float = _env_float("TT_PROXY_SPAWN_CLEARANCE_M", 13.0)
     proxy_spawn_lane_aware: bool = _env_bool("TT_PROXY_SPAWN_LANE_AWARE", True)
-    # lane-aware 参数（单位：米）
     proxy_spawn_same_lane_lateral_m: float = _env_float("TT_PROXY_SPAWN_SAME_LANE_LATERAL_M", 1.6)
-    proxy_spawn_other_lane_clearance_m: float = _env_float("TT_PROXY_SPAWN_OTHER_LANE_CLEARANCE_M", 2.5)
-    proxy_spawn_other_lane_lateral_m: float = _env_float("TT_PROXY_SPAWN_OTHER_LANE_LATERAL_M", 6.0)
-    proxy_warmup_seconds: float = _env_float("TT_PROXY_WARMUP_SECONDS", 8.0)
-    proxy_spawn_start_ratio: float = _env_float("TT_PROXY_SPAWN_START_RATIO", 0.18)
+    proxy_spawn_other_lane_clearance_m: float = _env_float("TT_PROXY_SPAWN_OTHER_LANE_CLEARANCE_M", 2.2)
+    proxy_spawn_other_lane_lateral_m: float = _env_float("TT_PROXY_SPAWN_OTHER_LANE_LATERAL_M", 7.0)
+    proxy_warmup_seconds: float = _env_float("TT_PROXY_WARMUP_SECONDS", 15.0)       # 高密度需更长预热
+    proxy_spawn_start_ratio: float = _env_float("TT_PROXY_SPAWN_START_RATIO", 0.12)
     proxy_use_tm: bool = _env_bool("TT_PROXY_USE_TM", False)
-    # 运行中每条车道的目标车辆数（持续补车维持该流量）；0 表示自动计算
     proxy_target_per_lane: int = _env_int("TT_PROXY_TARGET_PER_LANE", 0)
-    # 全量代理车状态日志间隔（秒）
     proxy_detail_log_interval_s: float = _env_float("TT_PROXY_DETAIL_LOG_INTERVAL_S", 5.0)
-    # 非 TM 模式下，按车道生成速度差分层（单位：百分比；正值=慢于基准，负值=快于基准）
+    # 车道速度分层（百分比；负值=更快，正值=更慢）
+    # 左车道：快 3%~8%（稳定超车道）
     proxy_speed_diff_left_min: float = _env_float("TT_PROXY_SPEED_DIFF_LEFT_MIN", -8.0)
-    proxy_speed_diff_left_max: float = _env_float("TT_PROXY_SPEED_DIFF_LEFT_MAX", -4.0)
+    proxy_speed_diff_left_max: float = _env_float("TT_PROXY_SPEED_DIFF_LEFT_MAX", -3.0)
+    # 中车道：基准速度 ±2%
     proxy_speed_diff_mid_min: float = _env_float("TT_PROXY_SPEED_DIFF_MID_MIN", -2.0)
     proxy_speed_diff_mid_max: float = _env_float("TT_PROXY_SPEED_DIFF_MID_MAX", 2.0)
-    proxy_speed_diff_right_min: float = _env_float("TT_PROXY_SPEED_DIFF_RIGHT_MIN", 4.0)
-    proxy_speed_diff_right_max: float = _env_float("TT_PROXY_SPEED_DIFF_RIGHT_MAX", 9.0)
+    # 右车道：慢 3%~8%（稳定行车道）
+    proxy_speed_diff_right_min: float = _env_float("TT_PROXY_SPEED_DIFF_RIGHT_MIN", 3.0)
+    proxy_speed_diff_right_max: float = _env_float("TT_PROXY_SPEED_DIFF_RIGHT_MAX", 8.0)
 
     # 兼容 vehicle_plan / Traffic Manager 约定
     min_vehicles_per_lane: int = _env_int("TT_MIN_VEHICLES_PER_LANE", 1)

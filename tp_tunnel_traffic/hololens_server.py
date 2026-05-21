@@ -86,9 +86,13 @@ class HoloLensServer:
     def start(self, vehicle=None) -> None:
         if self._running:
             return
+        # Wait for old thread to exit gracefully (non-blocking short timeout)
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=0.5)
         self._vehicle = vehicle
         self._running = True
-        self._spawn_camera_once()
+        if self._camera is None:
+            self._spawn_camera_once()
         self._thread = threading.Thread(target=self._bg_loop, daemon=True)
         self._thread.start()
         logger.info("HoloLensServer started (port %d)", self.port)
@@ -97,9 +101,7 @@ class HoloLensServer:
         global _HOLO_FRAME
         self._running = False
         _HOLO_FRAME = None
-        self._destroy_camera()
-        if self._thread:
-            self._thread.join(timeout=5.0)
+        # Don't destroy camera or block — return immediately
 
     def set_vehicle(self, vehicle) -> None:
         """Switch camera to follow a different vehicle.  No create/destroy."""
@@ -109,14 +111,13 @@ class HoloLensServer:
         # That's it — the callback reads self._vehicle live
 
     def pre_tick(self) -> None:
-        """Position camera BEFORE world.tick() — zero-lag.
-
-        Must be called from main thread before each world.tick().
-        """
+        """Position camera BEFORE world.tick() — zero-lag."""
         v = self._vehicle
         cam = self._camera
         if v is None or cam is None or not v.is_alive:
             return
+        t = getattr(self, "_tc", 0) + 1
+        setattr(self, "_tc", t)
         try:
             vt = v.get_transform()
             with _HOLO_ROTATION_LOCK:
@@ -137,6 +138,8 @@ class HoloLensServer:
                     roll=0.0,
                 ),
             ))
+            if t % 100 == 0:
+                print(f"[HoloLens] pre_tick #{t} yaw={y:+.1f}° pitch={p:+.1f}°", flush=True)
         except Exception:
             pass
 
@@ -294,6 +297,7 @@ class HoloLensServer:
             finally:
                 await pc.close()
 
-        async with websockets.serve(handler, "0.0.0.0", self.port, ping_interval=None):
+        async with websockets.serve(handler, "0.0.0.0", self.port, ping_interval=None,
+                                       close_timeout=1):
             while self._running:
                 await asyncio.sleep(0.5)

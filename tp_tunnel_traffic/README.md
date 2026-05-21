@@ -143,10 +143,57 @@ Traffic Manager 集成：自动导航配置与 TM 参数设置。
 
 ### 0) 前提
 - CARLA Server 已启动（默认 `localhost:2000`）
-- 你用的是 Windows CMD（不是 PowerShell）
+- 已安装依赖：`pip install pygame numpy aiortc websockets opencv-python`
 
-### 1) 安装 GUI 依赖（只需一次）
-在 `carla` conda 环境中：
+### 1) 一键启动（全功能）
+
+**默认已开启 GUI、代理车流、视频录制、HoloLens 推流**，无需设置环境变量：
+
+```bat
+call E:\Programs\miniconda\Scripts\activate.bat
+conda activate carla
+cd /d E:\code\track_plot
+python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
+```
+
+GUI 按钮行为：
+| 按钮 | 默认 | 点击后 |
+|---|---|---|
+| `Collect Selected` | OFF | ON → 帧级数据集采集 |
+| `Record Video` | OFF | ON → 连续视频录制 |
+| `HoloLens Stream` | OFF | ON → WebRTC 推流 |
+
+> 三个按钮互斥（同时只能一个 ON），切换代理车时自动跟随。
+
+### 2) 真实隧道车流参数（当前默认）
+
+参考中国高速公路隧道设计规范（限速 60~80 km/h，高峰流量 1500~2000 辆/车道/小时）：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `proxy_base_speed_mps` | 18.0 (~65 km/h) | 中车道巡航速度 |
+| `proxy_follow_distance_m` | 13.0 | 跟车距离（~0.7s headway） |
+| `proxy_target_per_lane` | 0（自动 → 8/车道） | 三车道共 ~24 辆车 |
+| `proxy_warmup_seconds` | 15.0 | 高密度预热时间 |
+
+车道速度分层（左快右慢）：
+
+| 车道 | 速度差 | 实际范围 |
+|---|---|---|
+| 左（超车道） | -15%~-5% | 68~77 km/h |
+| 中（行车道） | -3%~+3% | 63~67 km/h |
+| 右（慢车道） | +5%~+15% | 55~62 km/h |
+
+### 3) 环境变量覆盖
+
+如需关闭某个功能：
+
+```bat
+set TT_PROXY_ENABLE=0         rem 关代理车流
+set TT_HOLOLENS_ENABLE=0      rem 关 HoloLens 推流
+set TT_VIDEO_ENABLE=0         rem 关视频录制
+set TT_GUI_ENABLE=0           rem 关 GUI
+```
 
 ```bat
 pip install pygame numpy

@@ -90,13 +90,18 @@ def compute_control(
 
     # 速度控制
     speed_error = target_speed_mps - speed
-    throttle = _clamp(speed_error / max(target_speed_mps, 0.1), 0.0, 0.6)
+    throttle = _clamp(speed_error / max(target_speed_mps, 0.1), 0.0, 0.55)
     brake = 0.0
 
-    # 前车太近时减速/刹车
+    # 前车跟随 — 速度匹配（不复用距离制动）
     if front_gap_m is not None and front_gap_m < follow_distance_m:
-        throttle = 0.0
-        brake = _clamp((follow_distance_m - front_gap_m) / max(follow_distance_m, 0.1), 0.0, 1.0)
+        gap_ratio = front_gap_m / max(follow_distance_m, 0.1)
+        if gap_ratio < 0.25:       # 极近 → 轻刹
+            throttle = 0.0
+            brake = _clamp((0.25 - gap_ratio) * 0.6, 0.0, 0.15)
+        elif gap_ratio < 0.5:      # 较近 → 降目标速度匹配前车
+            throttle = _clamp(throttle * 0.3, 0.0, 0.3)
+        # > 50% → 正常行驶
 
     # 角度偏差大时，降低油门，避免冲出车道
     if abs(yaw_error) > 35.0:

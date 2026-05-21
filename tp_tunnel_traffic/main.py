@@ -868,13 +868,13 @@ def main():
                 for p in proxy_states:
                     if p.get("active") and p.get("vehicle") is not None and p["vehicle"].is_alive:
                         lane_counts[p["lane_id"]] = lane_counts.get(p["lane_id"], 0) + 1
-                # 临时缩小计划数量，只补缺口 lane；生成位置仍交给 build_vehicle_plan 处理
+                # 临时放大计划数量，快速补缺口车道
                 saved_min = getattr(config, "proxy_min_per_lane")
                 saved_max = getattr(config, "proxy_max_per_lane")
                 saved_start_ratio = getattr(config, "proxy_spawn_start_ratio")
                 try:
-                    setattr(config, "proxy_min_per_lane", 1)
-                    setattr(config, "proxy_max_per_lane", 1)
+                    setattr(config, "proxy_min_per_lane", 3)
+                    setattr(config, "proxy_max_per_lane", 3)
                     setattr(config, "proxy_spawn_start_ratio", min(float(saved_start_ratio), 0.08))
                     replenish_plans = build_vehicle_plan(world, lane_lists, config, rng)
                     for plan in replenish_plans:
@@ -887,7 +887,7 @@ def main():
                     setattr(config, "proxy_min_per_lane", saved_min)
                     setattr(config, "proxy_max_per_lane", saved_max)
                     setattr(config, "proxy_spawn_start_ratio", saved_start_ratio)
-                next_replenish_time = now + 1.5
+                next_replenish_time = now + 1.0
 
             if gui is not None and gui.enabled:
                 gui_action = gui.tick()
