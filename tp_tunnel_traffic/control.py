@@ -2,6 +2,8 @@
 
 import math
 
+from .idm import idm_acceleration
+
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
@@ -46,6 +48,7 @@ def compute_control(
     target_speed_mps: float,
     follow_distance_m: float,
     front_gap_m: float | None = None,
+    front_speed_mps: float | None = None,
     *,
     path_points=None,
     nearest_idx: int | None = None,
@@ -53,6 +56,12 @@ def compute_control(
     steer_lpf_alpha: float = 0.0,
     steer_max_rate: float = 0.0,
     dt_seconds: float | None = None,
+    # IDM parameters (optional overrides)
+    idm_a: float = 2.0,
+    idm_b: float = 1.5,
+    idm_s0: float = 2.0,
+    idm_T: float = 1.5,
+    idm_delta: float = 4.0,
 ):
     loc = vehicle.get_location()
     rot = vehicle.get_transform().rotation
@@ -88,20 +97,36 @@ def compute_control(
         steer = _clamp(steer, prev_steer - max_delta, prev_steer + max_delta)
     steer = _clamp(steer, -1.0, 1.0)
 
-    # 速度控制
-    speed_error = target_speed_mps - speed
-    throttle = _clamp(speed_error / max(target_speed_mps, 0.1), 0.0, 0.55)
-    brake = 0.0
+    # --- 速度控制 (IDM) ---
+    # Compute speed difference to leader
+    dv = 0.0
+    if front_speed_mps is not None:
+        dv = speed - front_speed_mps  # positive = ego faster
 
-    # 前车跟随 — 速度匹配（不复用距离制动）
-    if front_gap_m is not None and front_gap_m < follow_distance_m:
-        gap_ratio = front_gap_m / max(follow_distance_m, 0.1)
-        if gap_ratio < 0.25:       # 极近 → 轻刹
-            throttle = 0.0
-            brake = _clamp((0.25 - gap_ratio) * 0.6, 0.0, 0.15)
-        elif gap_ratio < 0.5:      # 较近 → 降目标速度匹配前车
-            throttle = _clamp(throttle * 0.3, 0.0, 0.3)
-        # > 50% → 正常行驶
+    # Use IDM if leader information is available
+    if front_gap_m is not None and front_speed_mps is not None:
+        accel = idm_acceleration(
+            speed, target_speed_mps, front_gap_m, dv,
+            a=idm_a, b=idm_b, s0=idm_s0, T=idm_T, delta=idm_delta,
+        )
+    elif front_gap_m is not None:
+        # Gap known but no speed info — use gap-only IDM (dv=0)
+        accel = idm_acceleration(
+            speed, target_speed_mps, front_gap_m, 0.0,
+            a=idm_a, b=idm_b, s0=idm_s0, T=idm_T, delta=idm_delta,
+        )
+    else:
+        # No leader: free-road acceleration
+        accel = idm_acceleration(speed, target_speed_mps, None, 0.0,
+                                  a=idm_a, b=idm_b, s0=idm_s0, T=idm_T, delta=idm_delta)
+
+    # Convert IDM acceleration to CARLA throttle / brake
+    if accel >= 0:
+        throttle = min(accel / max(idm_a, 0.1), 0.8)
+        brake = 0.0
+    else:
+        throttle = 0.0
+        brake = min(-accel / max(idm_b, 0.1), 1.0)
 
     # 角度偏差大时，降低油门，避免冲出车道
     if abs(yaw_error) > 35.0:

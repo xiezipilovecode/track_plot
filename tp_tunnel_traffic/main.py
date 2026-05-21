@@ -578,10 +578,13 @@ def main():
                             continue
 
                         front_gap_m = None
+                        front_speed_mps = None
                         if i + 1 < len(group):
                             leader = group[i + 1]["vehicle"]
                             try:
                                 front_gap_m = p_loc.distance(leader.get_location())
+                                vel = leader.get_velocity()
+                                front_speed_mps = (vel.x ** 2 + vel.y ** 2 + vel.z ** 2) ** 0.5
                             except Exception:
                                 front_gap_m = None
 
@@ -592,12 +595,18 @@ def main():
                             target_speed_mps=float(p["target_speed_mps"]),
                             follow_distance_m=float(config.proxy_follow_distance_m),
                             front_gap_m=front_gap_m,
+                            front_speed_mps=front_speed_mps,
                             path_points=p["lane_points"],
                             nearest_idx=p["nearest_idx"],
                             lookahead_m=float(config.lookahead_m),
                             steer_lpf_alpha=float(config.steer_lpf_alpha),
                             steer_max_rate=float(config.steer_max_rate),
                             dt_seconds=float(config.fixed_delta_seconds) if config.sync_mode else None,
+                            idm_a=float(config.idm_max_accel),
+                            idm_b=float(config.idm_comfort_decel),
+                            idm_s0=float(config.idm_min_gap),
+                            idm_T=float(config.idm_time_headway),
+                            idm_delta=float(config.idm_delta),
                         )
                         pv.apply_control(p_control)
                         p["last_control"] = p_control

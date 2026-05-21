@@ -602,9 +602,14 @@ def _drive_proxies(proxy_states: list[dict], config, dt_seconds, carla):
             pv = p["vehicle"]
             p_loc = pv.get_location()
             front_gap_m = None
+            front_gap_m = None
+            front_speed = None
             if i + 1 < len(group):
                 try:
-                    front_gap_m = p_loc.distance(group[i + 1]["vehicle"].get_location())
+                    leader = group[i + 1]["vehicle"]
+                    front_gap_m = p_loc.distance(leader.get_location())
+                    vel = leader.get_velocity()
+                    front_speed = (vel.x ** 2 + vel.y ** 2 + vel.z ** 2) ** 0.5
                 except Exception:
                     front_gap_m = None
             p_control = compute_control(
@@ -612,12 +617,18 @@ def _drive_proxies(proxy_states: list[dict], config, dt_seconds, carla):
                 target_speed_mps=float(p["target_speed_mps"]),
                 follow_distance_m=float(config.proxy_follow_distance_m),
                 front_gap_m=front_gap_m,
+                front_speed_mps=front_speed,
                 path_points=p["lane_points"],
                 nearest_idx=p["nearest_idx"],
                 lookahead_m=float(config.lookahead_m),
                 steer_lpf_alpha=float(config.steer_lpf_alpha),
                 steer_max_rate=float(config.steer_max_rate),
                 dt_seconds=dt_seconds,
+                idm_a=float(getattr(config, "idm_max_accel", 2.0)),
+                idm_b=float(getattr(config, "idm_comfort_decel", 1.5)),
+                idm_s0=float(getattr(config, "idm_min_gap", 2.0)),
+                idm_T=float(getattr(config, "idm_time_headway", 1.5)),
+                idm_delta=float(getattr(config, "idm_delta", 4.0)),
             )
             pv.apply_control(p_control)
             p["last_control"] = p_control

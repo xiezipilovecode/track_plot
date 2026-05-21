@@ -65,8 +65,8 @@ class TunnelTrafficConfig:
     # --- 单车中车道(-2)跟随控制调参 ---
     # 目标点前视距离（米），用于避免“追最近点”造成来回修正
     lookahead_m: float = _env_float("TT_LOOKAHEAD_M", 18.0)
-    # 转向低通滤波系数：steer = (1-a)*prev + a*raw（越小越平滑，响应越慢）
-    steer_lpf_alpha: float = _env_float("TT_STEER_LPF_ALPHA", 0.12)
+    # 转向低通滤波系数：steer = (1-a)*prev + a*raw（越大越灵敏，过大会抖动）
+    steer_lpf_alpha: float = _env_float("TT_STEER_LPF_ALPHA", 0.35)
     # 转向变化率限制（每秒最大变化量，单位 steer/s），用于抑制振荡
     steer_max_rate: float = _env_float("TT_STEER_MAX_RATE", 1.6)
     # 起步速度爬升时间（秒），降低起步打转/甩尾
@@ -115,6 +115,13 @@ class TunnelTrafficConfig:
     hololens_res_w: int = _env_int("TT_HOLOLENS_RES_W", 896)
     hololens_res_h: int = _env_int("TT_HOLOLENS_RES_H", 504)
     hololens_fps: int = _env_int("TT_HOLOLENS_FPS", 30)
+
+    # --- IDM（智能驾驶员模型）跟车参数 ---
+    idm_max_accel: float = _env_float("TT_IDM_MAX_ACCEL", 2.0)          # 最大加速度 (m/s²)
+    idm_comfort_decel: float = _env_float("TT_IDM_COMFORT_DECEL", 1.5)  # 舒适减速度 (m/s²)
+    idm_min_gap: float = _env_float("TT_IDM_MIN_GAP", 2.0)              # 最小停车距离 (m)
+    idm_time_headway: float = _env_float("TT_IDM_TIME_HEADWAY", 1.5)    # 期望时距 (s)
+    idm_delta: float = _env_float("TT_IDM_DELTA", 4.0)                  # 加速度指数
 
     # --- 隧道代理车流（真实隧道参数）---
     # 中国高速公路隧道：限速 60~80 km/h，车距 2~3 秒，高峰流量 1500~2000 辆/车道/小时
