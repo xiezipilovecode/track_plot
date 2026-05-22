@@ -140,7 +140,7 @@ class TunnelTrafficConfig:
     proxy_spawn_start_ratio: float = _env_float("TT_PROXY_SPAWN_START_RATIO", 0.12)
     proxy_use_tm: bool = _env_bool("TT_PROXY_USE_TM", False)
     proxy_target_per_lane: int = _env_int("TT_PROXY_TARGET_PER_LANE", 0)
-    proxy_detail_log_interval_s: float = _env_float("TT_PROXY_DETAIL_LOG_INTERVAL_S", 5.0)
+    proxy_detail_log_interval_s: float = _env_float("TT_PROXY_DETAIL_LOG_INTERVAL_S", 0.0)
     # 车道速度分层（百分比；负值=更快，正值=更慢）
     # 左车道：快 3%~8%（稳定超车道）
     proxy_speed_diff_left_min: float = _env_float("TT_PROXY_SPEED_DIFF_LEFT_MIN", -8.0)

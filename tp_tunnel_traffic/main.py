@@ -388,9 +388,7 @@ def main():
         lanes = build_three_lane_paths(carla, xodr_path=config.xodr_path, step_m=config.step_m, spawn_z=1.0)
         lane_points = lanes["-2"]
 
-        print(f"中间车道采样点数量: {len(lane_points)}")
-        print(f"左车道采样点数量: {len(lanes['-1'])}")
-        print(f"右车道采样点数量: {len(lanes['-3'])}")
+        print(f"车道采样: 左={len(lanes['-1'])}  中={len(lane_points)}  右={len(lanes['-3'])}")
 
         if False and config.debug_draw:
             _draw_debug_points(world, lanes["-1"])
@@ -415,11 +413,7 @@ def main():
                 pass
 
         target_speed = max(6.0, float(getattr(config, "proxy_base_speed_mps", 12.0)))
-        print(
-            f"代理车基准速度: {target_speed:.2f} m/s "
-            f"({target_speed * 3.6:.1f} km/h), follow_distance={float(config.proxy_follow_distance_m):.1f}m, "
-            f"lookahead={float(config.lookahead_m):.1f}m"
-        )
+        print(f"代理车基准速度: {target_speed:.2f}m/s ({target_speed * 3.6:.0f}km/h)")
         reserved_entry_m = 0.0
         proxy_states = []
         tm = None
@@ -446,16 +440,18 @@ def main():
             plans = build_vehicle_plan(world, lane_lists, config, rng)
             lane_counts = _lane_counts_by_index(plans)
             print(
-                f"代理车计划总数: {len(plans)}, 左/中/右 = "
-                f"{lane_counts.get(0, 0)}/{lane_counts.get(1, 0)}/{lane_counts.get(2, 0)}, "
-                f"reserved_entry_m={reserved_entry_m:.1f}, use_tm={config.proxy_use_tm}"
+                f"代理车计划: {len(plans)} 辆, "
+                f"左/中/右 = {lane_counts.get(0, 0)}/{lane_counts.get(1, 0)}/{lane_counts.get(2, 0)}"
             )
 
+            spawn_ok = 0
+            spawn_fail = 0
+            spawn_skip = 0
             for plan in plans:
                 lane_index = plan.lane_index
                 lane_wps = lane_lists[lane_index]
                 if not lane_wps:
-                    print(f"代理车跳过: lane={lane_index} 原因=车道点为空")
+                    spawn_skip += 1
                     continue
                 wp_idx = min(max(0, plan.waypoint_index), len(lane_wps) - 1)
                 start_wp = lane_wps[wp_idx].transform
@@ -478,7 +474,7 @@ def main():
 
                 # 额外入口净空：避免 warmup 后主车生成点附近被占
                 if _is_near_entry(proxy_tf.location, lane_lists[1][0].transform.location, reserved_entry_m):
-                    print(f"代理车跳过: lane={lane_index} wp={wp_idx} 原因=靠近主车入口")
+                    spawn_skip += 1
                     continue
 
                 proxy_vehicle = try_spawn_vehicle(
@@ -493,13 +489,10 @@ def main():
                     other_lane_lateral_m=float(getattr(config, "proxy_spawn_other_lane_lateral_m", 6.0)),
                 )
                 if proxy_vehicle is None:
-                    print(f"代理车生成失败: lane={lane_index} wp={wp_idx} blueprint={plan.blueprint_id}")
+                    spawn_fail += 1
                     continue
                 spawned.append(proxy_vehicle)
-                print(
-                    f"代理车生成成功: lane={lane_index} wp={wp_idx} blueprint={plan.blueprint_id} "
-                    f"color={plan.color or 'default'} speed_diff={plan.speed_diff_percent:.1f}%"
-                )
+                spawn_ok += 1
                 proxy_vehicle.set_simulate_physics(False)
                 world.tick()
                 proxy_vehicle.set_simulate_physics(True)
@@ -545,7 +538,7 @@ def main():
                         continue
                     kept.append(p)
                 proxy_states = kept
-                print(f"入口清理后剩余代理车: {len(proxy_states)}")
+                print(f"代理车: spawn {spawn_ok} OK, {spawn_skip} skip, {spawn_fail} fail  (计划{len(plans)}辆)")
 
         # 先让代理车预热一段时间，营造更稳定的交通流环境
         warmup_deadline = time.time() + max(0.0, float(config.proxy_warmup_seconds))
@@ -841,14 +834,15 @@ def main():
                     if p.get("active") and p.get("vehicle") is not None and p["vehicle"].is_alive:
                         lane_counts[p["lane_id"]] = lane_counts.get(p["lane_id"], 0) + 1
                 total_active = sum(lane_counts.values())
+                # In-place status bar (overwrite same line with \r)
                 print(
-                    f"代理车流状态: total={total_active}, "
-                    f"L/M/R={lane_counts.get(0, 0)}/{lane_counts.get(1, 0)}/{lane_counts.get(2, 0)}, "
-                    f"collect={'ON' if collect_proxy_enabled else 'OFF'}, target_per_lane={target_lane_count}"
+                    f"\r代理车流: {total_active} 辆  L={lane_counts.get(0, 0)}  M={lane_counts.get(1, 0)}  R={lane_counts.get(2, 0)}  "
+                    f"collect={'ON' if collect_proxy_enabled else 'OFF'}  ",
+                    end="", flush=True,
                 )
-                next_status_log_time = now + 1.0
+                next_status_log_time = now + 2.0
 
-            if now >= next_detail_log_time:
+            if now >= next_detail_log_time and config.proxy_detail_log_interval_s > 0:
                 active_states = [
                     p for p in proxy_states
                     if p.get("active") and p.get("vehicle") is not None and p["vehicle"].is_alive

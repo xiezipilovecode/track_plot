@@ -138,8 +138,6 @@ class HoloLensServer:
                     roll=0.0,
                 ),
             ))
-            if t % 100 == 0:
-                print(f"[HoloLens] pre_tick #{t} yaw={y:+.1f}° pitch={p:+.1f}°", flush=True)
         except Exception:
             pass
 
@@ -210,8 +208,6 @@ class HoloLensServer:
             # Just store frame — camera position already set by pre_tick()
             _HOLO_FRAME = image.raw_data
             count += 1
-            if count % 200 == 1:
-                print(f"[HoloLens] camera OK ({count})")
 
         self._camera.listen(_cb)
         print(f"[HoloLens] camera listening ({self.res_w}x{self.res_h})")
