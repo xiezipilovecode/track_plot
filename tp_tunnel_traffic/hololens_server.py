@@ -33,6 +33,7 @@ class HoloLensVideoTrack(VideoStreamTrack):
         self._fc = 0
         self._start: float | None = None
         self._pts_step = 90000 // self._fps
+        self._last_valid = None  # cached frame to prevent flicker
 
     async def recv(self):
         from av import VideoFrame
@@ -54,11 +55,13 @@ class HoloLensVideoTrack(VideoStreamTrack):
                 arr = np.frombuffer(data, dtype=np.uint8).reshape((self._h, self._w, 4))
                 rgb = arr[:, :, :3][:, :, ::-1]
                 frame = VideoFrame.from_ndarray(np.ascontiguousarray(rgb), format="rgb24")
+                self._last_valid = frame  # cache for anti-flicker
             except Exception:
-                frame = VideoFrame.from_ndarray(
+                frame = self._last_valid if self._last_valid is not None else VideoFrame.from_ndarray(
                     np.full((self._h, self._w, 3), 128, dtype=np.uint8), format="rgb24")
         else:
-            frame = VideoFrame.from_ndarray(
+            # Return cached frame instead of gray flicker
+            frame = self._last_valid if self._last_valid is not None else VideoFrame.from_ndarray(
                 np.full((self._h, self._w, 3), 128, dtype=np.uint8), format="rgb24")
         self._fc += 1
         frame.pts = self._fc * self._pts_step
@@ -194,6 +197,19 @@ class HoloLensServer:
         bp.set_attribute("image_size_x", str(self.res_w))
         bp.set_attribute("image_size_y", str(self.res_h))
         bp.set_attribute("fov", "90")
+        # Brighten tunnel scene: manual exposure + gamma
+        try:
+            bp.set_attribute("enable_postprocess_effects", "True")
+        except Exception:
+            pass
+        try:
+            bp.set_attribute("gamma", "2.2")
+        except Exception:
+            pass
+        try:
+            bp.set_attribute("exposure_compensation", "2.0")
+        except Exception:
+            pass
         # World camera at spectator position — not attached to any vehicle
         self._camera = self.world.spawn_actor(bp, self.world.get_spectator().get_transform())
         self._listen()

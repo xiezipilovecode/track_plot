@@ -112,8 +112,8 @@ class TunnelTrafficConfig:
     # --- HoloLens 2 WebRTC 推流 ---
     hololens_enable: bool = _env_bool("TT_HOLOLENS_ENABLE", True)
     hololens_port: int = _env_int("TT_HOLOLENS_PORT", 8765)
-    hololens_res_w: int = _env_int("TT_HOLOLENS_RES_W", 896)
-    hololens_res_h: int = _env_int("TT_HOLOLENS_RES_H", 504)
+    hololens_res_w: int = _env_int("TT_HOLOLENS_RES_W", 1280)
+    hololens_res_h: int = _env_int("TT_HOLOLENS_RES_H", 720)
     hololens_fps: int = _env_int("TT_HOLOLENS_FPS", 30)
 
     # --- IDM（智能驾驶员模型）跟车参数 ---
