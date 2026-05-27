@@ -80,6 +80,8 @@ class HoloLensServer:
         self.res_w = int(getattr(config, "hololens_res_w", 896))
         self.res_h = int(getattr(config, "hololens_res_h", 504))
         self.fps = int(getattr(config, "hololens_fps", 30))
+        self.fov = float(getattr(config, "hololens_fov", 60.0))
+        self.eye_z = float(getattr(config, "hololens_eye_z", 1.25))
         self._running = False
         self._vehicle = None  # current target vehicle (set by GUI)
         self._camera = None   # spawned ONCE, never destroyed
@@ -126,6 +128,13 @@ class HoloLensServer:
             with _HOLO_ROTATION_LOCK:
                 y = float(_HOLO_ROTATION["yaw"])
                 p = float(_HOLO_ROTATION["pitch"])
+            # EMA smoothing for head rotation — natural inertia
+            py = float(getattr(self, "_prev_yaw", 0.0))
+            pp = float(getattr(self, "_prev_pitch", 0.0))
+            sy = py * 0.7 + y * 0.3
+            sp = pp * 0.7 + p * 0.3
+            setattr(self, "_prev_yaw", sy)
+            setattr(self, "_prev_pitch", sp)
             fwd_m, right_m, up_m = self._driver_offset(v)
             fwd = vt.get_forward_vector()
             right = vt.get_right_vector()
@@ -136,8 +145,8 @@ class HoloLensServer:
                     vt.location.z + up_m,
                 ),
                 self.carla.Rotation(
-                    pitch=vt.rotation.pitch - p,
-                    yaw=vt.rotation.yaw + y,
+                    pitch=vt.rotation.pitch - sp,
+                    yaw=vt.rotation.yaw + sy,
                     roll=0.0,
                 ),
             ))
@@ -196,7 +205,7 @@ class HoloLensServer:
         bp = self.world.get_blueprint_library().find("sensor.camera.rgb")
         bp.set_attribute("image_size_x", str(self.res_w))
         bp.set_attribute("image_size_y", str(self.res_h))
-        bp.set_attribute("fov", "90")
+        bp.set_attribute("fov", str(int(self.fov)))
         # Brighten tunnel scene: manual exposure + gamma
         try:
             bp.set_attribute("enable_postprocess_effects", "True")
@@ -222,7 +231,7 @@ class HoloLensServer:
             nonlocal count
             global _HOLO_FRAME
             # Just store frame — camera position already set by pre_tick()
-            _HOLO_FRAME = image.raw_data
+            _HOLO_FRAME = bytes(image.raw_data)  # deep copy — prevents flicker
             count += 1
 
         self._camera.listen(_cb)

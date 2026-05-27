@@ -114,6 +114,8 @@ class TunnelTrafficConfig:
     hololens_port: int = _env_int("TT_HOLOLENS_PORT", 8765)
     hololens_res_w: int = _env_int("TT_HOLOLENS_RES_W", 1280)
     hololens_res_h: int = _env_int("TT_HOLOLENS_RES_H", 720)
+    hololens_fov: float = _env_float("TT_HOLOLENS_FOV", 60.0)
+    hololens_eye_z: float = _env_float("TT_HOLOLENS_EYE_HEIGHT_M", 1.25)
     hololens_fps: int = _env_int("TT_HOLOLENS_FPS", 30)
 
     # --- IDM（智能驾驶员模型）跟车参数 ---
