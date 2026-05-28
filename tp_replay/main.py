@@ -64,6 +64,13 @@ def _run_stitch_autopilot(world, client, engine, settings) -> None:
         _info("错误：未加载到有效的拼接轨迹")
         return
 
+    # 过滤：只保留前 N 秒内开始的轨迹（避免 11 天跨度导致车辆永不生成）
+    max_start_s = _get_float_from_env("TP_STITCH_MAX_START_S", 600.0)
+    stitch_tracks = sorted(stitch_tracks, key=lambda t: t.start_time)
+    earliest = stitch_tracks[0].start_time if stitch_tracks else 0.0
+    stitch_tracks = [t for t in stitch_tracks if t.start_time - earliest < max_start_s]
+    _info(f"Time-filtered to {len(stitch_tracks)} tracks (first {max_start_s}s window)")
+
     # Phase 3: 创建 autopilot 编排器
     autopilot = StitchAutopilot(world, client, engine)
     autopilot.load(stitch_tracks)
