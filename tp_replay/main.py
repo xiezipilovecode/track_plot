@@ -34,6 +34,88 @@ from .world_utils import _maybe_generate_opendrive_world
 logger = logging.getLogger(__name__)
 
 
+def _run_stitch_autopilot(world, client, engine, settings) -> None:
+    """TM 自动驾驶模式：拼接轨迹 → TM 自动驾驶回放。"""
+    from .stitch_adapter import StitchAdapter
+    from .stitch_autopilot import StitchAutopilot
+
+    stitch_json = os.getenv("TP_STITCH_JSON_PATH") or config.STITCH_JSON_PATH
+    if not stitch_json:
+        _info("错误：stitch_autopilot 模式需要设置 TP_STITCH_JSON_PATH")
+        return
+
+    # Phase 1: 运行 process_data 获取坐标变换参数
+    anchor_file = config.DATA_FILE_PATH
+    if not anchor_file or not os.path.exists(anchor_file):
+        _info(f"警告：锚点文件不存在 {anchor_file}，使用默认变换")
+    else:
+        engine.process_data(anchor_file)
+        engine.pending_tracks = []
+
+    # Phase 2: 加载拼接轨迹
+    adapter = StitchAdapter(engine)
+    stitch_tracks = adapter.load_and_convert(
+        stitch_json,
+        min_quality=_get_float_from_env("TP_STITCH_MIN_QUALITY", float(config.STITCH_MIN_QUALITY)),
+        min_cameras=_get_int_from_env("TP_STITCH_MIN_CAMERAS", int(config.STITCH_MIN_CAMERAS)),
+        max_tracks=_get_int_from_env("TP_TRACK_LIMIT", 0) or None,
+    )
+    if not stitch_tracks:
+        _info("错误：未加载到有效的拼接轨迹")
+        return
+
+    # Phase 3: 创建 autopilot 编排器
+    autopilot = StitchAutopilot(world, client, engine)
+    autopilot.load(stitch_tracks)
+
+    _try_set_spectator_view(world, engine)
+    _info(f"Stitch-Autopilot: {len(stitch_tracks)} trajectories | "
+          f"TM active={autopilot._spawned_total} max={config.STITCH_TM_MAX_ACTIVE}")
+
+    # Phase 4: 主循环
+    fixed_dt = float(settings.fixed_delta_seconds)
+    tick_idx = 0
+
+    while True:
+        world.tick()
+        active_cnt = autopilot.tick(fixed_dt)
+        tick_idx += 1
+
+        if tick_idx % max(1, int(config.PRINT_EVERY_N_TICKS)) == 0:
+            s = autopilot.stats
+            print(
+                f"\rTime: {s['current_time']:.1f}s | Active: {s['active']} "
+                f"| Spawned: {s['spawned']} | Finished: {s['finished']} "
+                f"| Pending: {s['pending']} | Fail: {s['failures']}   ",
+                end="",
+            )
+
+        if tick_idx % max(1, int(config.STATUS_LOG_EVERY_N_TICKS)) == 0:
+            s = autopilot.stats
+            logger.info(
+                "Status: time=%.1fs active=%d pending=%d spawned=%d finished=%d failures=%d",
+                s["current_time"], s["active"], s["pending"],
+                s["spawned"], s["finished"], s["failures"],
+            )
+
+        if s["pending"] == 0 and s["active"] == 0:
+            if config.MAX_TRAJ_TIME_SECONDS and s["current_time"] < float(config.MAX_TRAJ_TIME_SECONDS):
+                continue
+            _info("\nStitch-Autopilot playback finished.")
+            s_final = autopilot.stats
+            logger.info(
+                "Final stats: spawned=%d finished=%d failures=%d",
+                s_final["spawned"], s_final["finished"], s_final["failures"],
+            )
+            break
+
+        if config.MAX_TRAJ_TIME_SECONDS and s["current_time"] >= float(config.MAX_TRAJ_TIME_SECONDS):
+            _info(f"\nStop: reached TP_MAX_TRAJ_TIME={float(config.MAX_TRAJ_TIME_SECONDS):.2f}s")
+            break
+
+    autopilot.cleanup()
+
+
 def _apply_env_overrides_to_config() -> None:
     """Mutate tp_replay.config module-level defaults using env vars.
 
@@ -417,6 +499,13 @@ def main() -> None:
         world.apply_settings(settings)
 
         engine = ReplayEngine(client, config.XODR_PATH)
+
+        # —— Stitch-Autopilot 模式 ——
+        replay_mode = _get_str_from_env("TP_REPLAY_MODE", "kinematic").strip().lower()
+        if replay_mode == "stitch_autopilot":
+            _run_stitch_autopilot(world, client, engine, settings)
+            return
+
         engine.process_data(config.DATA_FILE_PATH)
         if not engine.pending_tracks:
             logger.warning("No tracks loaded; exiting")

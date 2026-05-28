@@ -4,6 +4,7 @@
 """
 
 import math
+import os
 
 
 # ==============================================================================
@@ -115,3 +116,25 @@ SPAWN_DEFER_SECONDS = 0.8
 
 # 便于小规模测试（环境变量覆盖）：达到该轨迹时间后强制停止（默认 0=不限制）
 MAX_TRAJ_TIME_SECONDS = 0.0
+
+# ==============================================================================
+# 2. Stitch-Autopilot 配置（TM 自动驾驶模式）
+# ==============================================================================
+
+# 拼接轨迹 JSON 路径
+STITCH_JSON_PATH = os.getenv("TP_STITCH_JSON_PATH", "")
+
+# 质量过滤
+STITCH_MIN_QUALITY = 0.5      # 最低质量评分
+STITCH_MIN_CAMERAS = 2        # 最少跨摄像头数
+
+# TM（Traffic Manager）参数
+STITCH_TM_PORT = int(os.getenv("TP_STITCH_TM_PORT", "8000"))
+STITCH_TM_IGNORE_LIGHTS = True
+STITCH_TM_IGNORE_SIGNS = True
+STITCH_TM_AUTO_LANE_CHANGE = False   # 隧道内禁止变道
+STITCH_TM_FOLLOW_DISTANCE = float(os.getenv("TP_STITCH_TM_FOLLOW_DISTANCE", "8.0"))
+STITCH_TM_SPEED_LIMIT_MPS = float(os.getenv("TP_STITCH_TM_SPEED_LIMIT_MPS", "22.22"))  # ~80km/h
+STITCH_TM_SPEED_UPDATE_INTERVAL = float(os.getenv("TP_STITCH_TM_SPEED_UPDATE_INTERVAL", "0.5"))
+STITCH_TM_SPAWN_STAGGER = int(os.getenv("TP_STITCH_TM_SPAWN_STAGGER", "3"))
+STITCH_TM_MAX_ACTIVE = int(os.getenv("TP_STITCH_TM_MAX_ACTIVE", "30"))

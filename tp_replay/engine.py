@@ -599,6 +599,14 @@ class ReplayEngine:
                 except Exception:
                     continue
 
+        # —— StitchAdapter 所需的坐标变换参数缓存 ——
+        self._data_start_point = data_start_point
+        self._data_angle = data_angle
+        self._stitch_cos_a = cos_a
+        self._stitch_sin_a = sin_a
+        self._stitch_off_x = off_x
+        self._stitch_off_y = off_y
+
         self.pending_tracks = temp_tracks
         _info(f"数据加载完成: {len(temp_tracks)} 条轨迹")
 
