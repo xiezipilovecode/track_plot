@@ -25,17 +25,36 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import matplotlib.font_manager as fm
 import numpy as np
+import os
 
-# ── 中文字体设置 ──
-for fname in fm.findSystemFonts():
-    if "simhei" in fname.lower() or "msyh" in fname.lower() or "microsoft yahei" in fname.lower():
-        plt.rcParams["font.sans-serif"] = [fm.FontProperties(fname=fname).get_name(), "DejaVu Sans"]
-        plt.rcParams["axes.unicode_minus"] = False
+# ── 中文字体设置（Windows 环境） ──
+_CN_FONT = None
+# 按优先级尝试常见中文字体
+for _font_name in ["Microsoft YaHei", "SimHei", "SimSun", "KaiTi"]:
+    for _fp in fm.findSystemFonts():
+        if _font_name.lower().replace(" ", "") in os.path.basename(_fp).lower().replace(" ", ""):
+            _CN_FONT = fm.FontProperties(fname=_fp)
+            break
+    if _CN_FONT is not None:
         break
+
+if _CN_FONT is not None:
+    plt.rcParams["font.family"] = _CN_FONT.get_name()
 else:
-    # Fallback: 尝试常见中文字体
-    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
-    plt.rcParams["axes.unicode_minus"] = False
+    # 兜底：直接扫描所有字体找含中文的
+    for _fp in fm.findSystemFonts():
+        try:
+            _prop = fm.FontProperties(fname=_fp)
+            _name = _prop.get_name()
+            if any(kw in _name.lower() for kw in ["hei", "song", "kai", "ming", "yahei", "chinese"]):
+                _CN_FONT = _prop
+                plt.rcParams["font.family"] = _name
+                break
+        except Exception:
+            continue
+
+plt.rcParams["axes.unicode_minus"] = False
+print(f"中文字体: {_CN_FONT.get_name() if _CN_FONT else '未找到（标签将显示为英文）'}")
 
 # ── 配色（按摄像头） ──
 CAMERA_COLORS = {
@@ -78,26 +97,29 @@ def load_trajectories(json_path: str, sample: int = 0):
     return trajs
 
 
-def plot_all(trajs: list, output_path: str, dpi: int = 150):
+def plot_all(trajs: list, output_path: str, dpi: int = 150, use_english: bool = False):
     """生成 2×2 综合可视化。"""
     fig, axes = plt.subplots(2, 2, figsize=(18, 12))
-    fig.suptitle("隧道六路摄像头轨迹拼接结果可视化", fontsize=16, fontweight="bold", y=0.98)
+
+    title = "Tunnel 6-Camera Trajectory Stitching Visualization" if use_english \
+            else "隧道六路摄像头轨迹拼接结果可视化"
+    fig.suptitle(title, fontsize=16, fontweight="bold", y=0.98)
 
     # ── Panel 1: 时距图 ──
     ax1 = axes[0, 0]
-    _plot_time_space(ax1, trajs)
+    _plot_time_space(ax1, trajs, use_english)
 
     # ── Panel 2: 摄像头覆盖分布 ──
     ax2 = axes[0, 1]
-    _plot_camera_distribution(ax2, trajs)
+    _plot_camera_distribution(ax2, trajs, use_english)
 
     # ── Panel 3: 质量评分分布 ──
     ax3 = axes[1, 0]
-    _plot_quality_distribution(ax3, trajs)
+    _plot_quality_distribution(ax3, trajs, use_english)
 
     # ── Panel 4: 精选轨迹放大 ──
     ax4 = axes[1, 1]
-    _plot_featured_trajectories(ax4, trajs)
+    _plot_featured_trajectories(ax4, trajs, use_english)
 
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
@@ -109,7 +131,7 @@ def plot_all(trajs: list, output_path: str, dpi: int = 150):
 #  Panel 1: 时距图
 # ═══════════════════════════════════════════════════════════
 
-def _plot_time_space(ax, trajs):
+def _plot_time_space(ax, trajs, use_english=False):
     """时距图：X=时间(相对秒), Y=y坐标(cm), 每条线=一辆车。"""
     # 使用全局最早时间作为零点
     all_ts = []
@@ -162,14 +184,19 @@ def _plot_time_space(ax, trajs):
     # 图例
     from matplotlib.patches import Patch
     legend_elements = [
-        Patch(facecolor=CAMERA_COLORS[c], label=CAMERA_LABELS.get(c, c))
+        Patch(facecolor=CAMERA_COLORS[c],
+              label=CAMERA_LABELS.get(c, c) if not use_english else c)
         for c in ["TV023", "TV024", "TV025", "TV026", "TV027", "TV028", "INTERP"]
     ]
     ax.legend(handles=legend_elements, loc="upper right", fontsize=7, ncol=2)
 
-    ax.set_xlabel("时间（相对秒）", fontsize=10)
-    ax.set_ylabel("y 坐标（cm）", fontsize=10)
-    ax.set_title(f"时距图（{min(len(trajs), max_plot)} 条轨迹）", fontsize=11, fontweight="bold")
+    ax.set_xlabel("Time (relative seconds)" if use_english else "时间（相对秒）", fontsize=10)
+    ax.set_ylabel("Y Coordinate (cm)" if use_english else "y 坐标（cm）", fontsize=10)
+    ax.set_title(
+        f"Time-Space Diagram ({min(len(trajs), max_plot)} trajectories)" if use_english
+        else f"时距图（{min(len(trajs), max_plot)} 条轨迹）",
+        fontsize=11, fontweight="bold",
+    )
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e6:.1f}M"))
     ax.grid(True, alpha=0.2)
 
@@ -178,91 +205,59 @@ def _plot_time_space(ax, trajs):
 #  Panel 2: 摄像头覆盖分布
 # ═══════════════════════════════════════════════════════════
 
-def _plot_camera_distribution(ax, trajs):
+def _plot_camera_distribution(ax, trajs, use_english=False):
     """摄像头覆盖数柱状图。"""
     cam_counts = Counter(t.get("camera_count", 0) for t in trajs)
-
-    x = sorted(cam_counts.keys())
-    y = [cam_counts[k] for k in x]
+    x, y = sorted(cam_counts.keys()), [cam_counts[k] for k in sorted(cam_counts.keys())]
     colors = ["#fbb4ae" if k <= 2 else "#b3cde3" if k <= 4 else "#ccebc5" for k in x]
-
     bars = ax.bar(x, y, color=colors, edgecolor="white", linewidth=0.8)
-
     for bar, val in zip(bars, y):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(y)*0.01,
-                f"{val}\n({val/max(1,sum(y))*100:.1f}%)",
-                ha="center", va="bottom", fontsize=8)
-
-    ax.set_xlabel("覆盖摄像头数", fontsize=10)
-    ax.set_ylabel("轨迹数", fontsize=10)
-    ax.set_title("摄像头覆盖分布", fontsize=11, fontweight="bold")
-    ax.set_xticks(x)
-    ax.grid(axis="y", alpha=0.2)
+                f"{val}\n({val/max(1,sum(y))*100:.1f}%)", ha="center", va="bottom", fontsize=8)
+    ax.set_xlabel("Camera Count" if use_english else "覆盖摄像头数", fontsize=10)
+    ax.set_ylabel("Trajectory Count" if use_english else "轨迹数", fontsize=10)
+    ax.set_title("Camera Coverage Distribution" if use_english else "摄像头覆盖分布", fontsize=11, fontweight="bold")
+    ax.set_xticks(x); ax.grid(axis="y", alpha=0.2)
 
 
-# ═══════════════════════════════════════════════════════════
-#  Panel 3: 质量评分分布
-# ═══════════════════════════════════════════════════════════
-
-def _plot_quality_distribution(ax, trajs):
+def _plot_quality_distribution(ax, trajs, use_english=False):
     """质量评分直方图。"""
     scores = [t.get("quality_score", 0) for t in trajs]
-    if not scores:
-        return
-
+    if not scores: return
     ax.hist(scores, bins=40, color="#6baed6", edgecolor="white", alpha=0.85)
-
-    mean_s = np.mean(scores)
-    median_s = np.median(scores)
-    ax.axvline(mean_s, color="#e41a1c", linestyle="--", linewidth=1.5, label=f"均值={mean_s:.3f}")
-    ax.axvline(median_s, color="#377eb8", linestyle="-.", linewidth=1.5, label=f"中位数={median_s:.3f}")
-
-    ax.set_xlabel("质量评分", fontsize=10)
-    ax.set_ylabel("轨迹数", fontsize=10)
-    ax.set_title(f"质量评分分布（n={len(scores)}）", fontsize=11, fontweight="bold")
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.2)
+    mean_s, median_s = np.mean(scores), np.median(scores)
+    ax.axvline(mean_s, color="#e41a1c", linestyle="--", linewidth=1.5,
+               label=f"{'Mean' if use_english else '均值'}={mean_s:.3f}")
+    ax.axvline(median_s, color="#377eb8", linestyle="-.", linewidth=1.5,
+               label=f"{'Median' if use_english else '中位数'}={median_s:.3f}")
+    ax.set_xlabel("Quality Score" if use_english else "质量评分", fontsize=10)
+    ax.set_ylabel("Trajectory Count" if use_english else "轨迹数", fontsize=10)
+    ax.set_title(f"{'Quality Score Distribution' if use_english else '质量评分分布'} (n={len(scores)})", fontsize=11, fontweight="bold")
+    ax.legend(fontsize=8); ax.grid(axis="y", alpha=0.2)
 
 
-# ═══════════════════════════════════════════════════════════
-#  Panel 4: 精选轨迹放大
-# ═══════════════════════════════════════════════════════════
-
-def _plot_featured_trajectories(ax, trajs):
+def _plot_featured_trajectories(ax, trajs, use_english=False):
     """选取几条高质量全摄像头轨迹放大展示。"""
-    # 筛选高质量 6 摄像头轨迹
     top_trajs = sorted(
         [t for t in trajs if t.get("camera_count", 0) >= 5 and t.get("quality_score", 0) > 0.8],
-        key=lambda t: t.get("quality_score", 0),
-        reverse=True,
-    )[:8]
-
+        key=lambda t: t.get("quality_score", 0), reverse=True)[:8]
     if not top_trajs:
         top_trajs = sorted(trajs, key=lambda t: t.get("quality_score", 0), reverse=True)[:8]
-
-    # 使用全局最早时间
-    all_ts = []
+    all_ts, t0 = [], 0
     for t in top_trajs:
-        for n in t.get("nodes", []):
-            all_ts.append(n["timestamp"])
+        for n in t.get("nodes", []): all_ts.append(n["timestamp"])
     t0 = min(all_ts) if all_ts else 0
-
     colors = plt.cm.tab10(np.linspace(0, 1, len(top_trajs)))
-
     for i, t in enumerate(top_trajs):
         nodes = t.get("nodes", [])
         times = [(n["timestamp"] - t0) / 1000.0 for n in nodes]
         ys = [n["y"] for n in nodes]
-
-        label = (f"{t['trajectory_id']} "
-                 f"(Q={t.get('quality_score',0):.2f} "
-                 f"C={t.get('camera_count',0)} "
-                 f"{t.get('vehicle_type','?')})")
+        label = f"{t['trajectory_id']} (Q={t.get('quality_score',0):.2f} C={t.get('camera_count',0)} {t.get('vehicle_type','?')})"
         ax.plot(times, ys, color=colors[i], linewidth=1.5, alpha=0.85, label=label)
-
-    ax.set_xlabel("时间（相对秒）", fontsize=10)
-    ax.set_ylabel("y 坐标（cm）", fontsize=10)
-    ax.set_title(f"精选拼接轨迹（Top {len(top_trajs)}）", fontsize=11, fontweight="bold")
+    ax.set_xlabel("Time (relative seconds)" if use_english else "时间（相对秒）", fontsize=10)
+    ax.set_ylabel("Y Coordinate (cm)" if use_english else "y 坐标（cm）", fontsize=10)
+    title = f"Featured Stitched Trajectories (Top {len(top_trajs)})" if use_english else f"精选拼接轨迹（Top {len(top_trajs)}）"
+    ax.set_title(title, fontsize=11, fontweight="bold")
     ax.legend(fontsize=6, loc="lower right")
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x/1e6:.1f}M"))
     ax.grid(True, alpha=0.2)
@@ -282,6 +277,8 @@ def main():
                         help="采样轨迹数（0=全部，默认 2000）")
     parser.add_argument("--dpi", type=int, default=150,
                         help="输出图片 DPI（默认 150）")
+    parser.add_argument("--english", action="store_true",
+                        help="使用英文标签（避免中文字体问题）")
     args = parser.parse_args()
 
     # 默认路径
@@ -299,7 +296,7 @@ def main():
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     trajs = load_trajectories(input_path, sample=args.sample)
-    plot_all(trajs, output_path, dpi=args.dpi)
+    plot_all(trajs, output_path, dpi=args.dpi, use_english=args.english)
 
 
 if __name__ == "__main__":
