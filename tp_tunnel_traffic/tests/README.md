@@ -19,7 +19,7 @@
 
 | 文件 | 用途 | 运行命令 |
 |---|---|---|
-| `test_hololens_client.py` | WebRTC 测试客户端，连接推流服务端，OpenCV 显示画面 | `python -m tp_tunnel_traffic.tests.test_hololens_client` |
+| `test_hololens_client.py` | WebRTC 测试客户端，连接推流服务端，OpenCV 显示画面（含 HUD/沉浸效果） | `python -m tp_tunnel_traffic.tests.test_hololens_client` |
 
 ## 测试流程建议
 

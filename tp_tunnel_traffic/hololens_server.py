@@ -9,6 +9,7 @@ import time
 from fractions import Fraction
 
 import numpy as np
+import random
 
 try:
     from aiortc import VideoStreamTrack
@@ -21,6 +22,12 @@ logger = logging.getLogger("HoloLensServer")
 _HOLO_FRAME = None
 _HOLO_ROTATION = {"yaw": 0.0, "pitch": 0.0}
 _HOLO_ROTATION_LOCK = threading.Lock()
+# Immersive shared state（pre_tick writes → recv reads）
+_HOLO_SPEED = 0.0
+_HOLO_LANE = ""
+_HOLO_TUNNEL_P = 0.0
+_HOLO_LANE_POINTS = None
+_HOLO_LANE_POINTS_LEN = 0
 
 
 class HoloLensVideoTrack(VideoStreamTrack):
@@ -33,40 +40,70 @@ class HoloLensVideoTrack(VideoStreamTrack):
         self._fc = 0
         self._start: float | None = None
         self._pts_step = 90000 // self._fps
-        self._last_valid = None  # cached frame to prevent flicker
+        self._last_bgr = None  # cache numpy array, not VideoFrame
 
     async def recv(self):
         from av import VideoFrame
+        import cv2
 
         now = time.time()
         if self._start is None:
             self._start = now
         target = self._start + self._fc / self._fps
         wait = target - now
-        if self._fc % 100 == 0 and abs(wait) > 0.5:
+        if self._fc % 100 == 0 and abs(wait) > 0.2:  # softer anti-drift
             self._start = now - self._fc / self._fps
             wait = 0
         if wait > 0.001:
             await asyncio.sleep(wait)
 
+        # Atomic read of all shared state
         data = _HOLO_FRAME
+        speed = _HOLO_SPEED
+        tunnel_p = _HOLO_TUNNEL_P
+        lane = _HOLO_LANE
+
         if data is not None:
             try:
                 arr = np.frombuffer(data, dtype=np.uint8).reshape((self._h, self._w, 4))
-                rgb = arr[:, :, :3][:, :, ::-1]
+                bgr = arr[:, :, :3].copy()
+                kmh = speed * 3.6
+
+                # Merged immersive effects — single addWeighted call
+                bright = 1.0
+                if 0.1 < tunnel_p < 0.9 and kmh > 10:
+                    bright *= 1.0 + 0.06 * np.sin(time.time() * speed / 10.0)
+                if tunnel_p < 0.06:
+                    bright *= 1.0 + (0.06 - tunnel_p) * 3.0
+                if bright != 1.0:
+                    bgr = cv2.addWeighted(bgr, float(bright), bgr, 0, 0)
+
+                # HUD
+                cv2.putText(bgr, f"{kmh:.0f} km/h  {lane}", (20, self._h - 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.rectangle(bgr, (20, self._h - 18),
+                              (20 + int(min(200, kmh * 3)), self._h - 10), (0, 255, 0), -1)
+
+                # BGR → RGB → VideoFrame
+                rgb = bgr[:, :, ::-1]
                 frame = VideoFrame.from_ndarray(np.ascontiguousarray(rgb), format="rgb24")
-                self._last_valid = frame  # cache for anti-flicker
+                self._last_bgr = bgr
             except Exception:
-                frame = self._last_valid if self._last_valid is not None else VideoFrame.from_ndarray(
-                    np.full((self._h, self._w, 3), 128, dtype=np.uint8), format="rgb24")
+                frame = self._make_fallback()
         else:
-            # Return cached frame instead of gray flicker
-            frame = self._last_valid if self._last_valid is not None else VideoFrame.from_ndarray(
-                np.full((self._h, self._w, 3), 128, dtype=np.uint8), format="rgb24")
+            frame = self._make_fallback()
         self._fc += 1
         frame.pts = self._fc * self._pts_step
         frame.time_base = Fraction(1, 90000)
         return frame
+
+    def _make_fallback(self):
+        from av import VideoFrame
+        if self._last_bgr is not None:
+            rgb = self._last_bgr[:, :, ::-1]
+            return VideoFrame.from_ndarray(np.ascontiguousarray(rgb), format="rgb24")
+        return VideoFrame.from_ndarray(
+            np.full((self._h, self._w, 3), 128, dtype=np.uint8), format="rgb24")
 
 
 class HoloLensServer:
@@ -115,8 +152,17 @@ class HoloLensServer:
         self._vehicle = vehicle
         # That's it — the callback reads self._vehicle live
 
+    @staticmethod
+    def set_lane_points(lane_points) -> None:
+        """Pass lane points for tunnel detection (called once from main.py)."""
+        global _HOLO_LANE_POINTS, _HOLO_LANE_POINTS_LEN
+        if lane_points is not None:
+            _HOLO_LANE_POINTS = lane_points
+            _HOLO_LANE_POINTS_LEN = len(lane_points)
+
     def pre_tick(self) -> None:
         """Position camera BEFORE world.tick() — zero-lag."""
+        global _HOLO_SPEED, _HOLO_LANE, _HOLO_TUNNEL_P
         v = self._vehicle
         cam = self._camera
         if v is None or cam is None or not v.is_alive:
@@ -125,24 +171,52 @@ class HoloLensServer:
         setattr(self, "_tc", t)
         try:
             vt = v.get_transform()
+            vel = v.get_velocity()
+            speed = (vel.x ** 2 + vel.y ** 2 + vel.z ** 2) ** 0.5
             with _HOLO_ROTATION_LOCK:
                 y = float(_HOLO_ROTATION["yaw"])
                 p = float(_HOLO_ROTATION["pitch"])
-            # EMA smoothing for head rotation — natural inertia
+            # EMA smoothing — light touch, responsive
             py = float(getattr(self, "_prev_yaw", 0.0))
             pp = float(getattr(self, "_prev_pitch", 0.0))
-            sy = py * 0.7 + y * 0.3
-            sp = pp * 0.7 + p * 0.3
+            sy = py * 0.4 + y * 0.6   # 60% new — more responsive
+            sp = pp * 0.4 + p * 0.6
             setattr(self, "_prev_yaw", sy)
             setattr(self, "_prev_pitch", sp)
             fwd_m, right_m, up_m = self._driver_offset(v)
             fwd = vt.get_forward_vector()
             right = vt.get_right_vector()
+
+            # --- Immersive: shared state ---
+            _HOLO_SPEED = speed
+            try:
+                vid = str(v.type_id).lower()
+                if "micra" in vid or "cooper" in vid or "mini" in vid or "citroen" in vid:
+                    _HOLO_LANE = "compact"
+                elif "patrol" in vid or "sprinter" in vid or "jeep" in vid or "range" in vid:
+                    _HOLO_LANE = "suv"
+                elif "mustang" in vid or "coupe" in vid:
+                    _HOLO_LANE = "sport"
+                else:
+                    _HOLO_LANE = "sedan"
+            except Exception:
+                _HOLO_LANE = ""
+            if _HOLO_LANE_POINTS is not None and _HOLO_LANE_POINTS_LEN > 0:
+                try:
+                    idx = getattr(self, "_nearest_idx", 50)
+                    _HOLO_TUNNEL_P = min(1.0, max(0.0, idx / _HOLO_LANE_POINTS_LEN))
+                except Exception:
+                    _HOLO_TUNNEL_P = 0.5
+
+            # --- Immersive: road vibration (direct, not through EMA) ---
+            vib_z = (random.random() * 2 - 1) * speed * 0.00015
+            vib_x = (random.random() * 2 - 1) * speed * 0.00008
+
             cam.set_transform(self.carla.Transform(
                 self.carla.Location(
-                    vt.location.x + fwd.x * fwd_m - right.x * abs(right_m),
+                    vt.location.x + fwd.x * fwd_m - right.x * abs(right_m) + vib_x,
                     vt.location.y + fwd.y * fwd_m - right.y * abs(right_m),
-                    vt.location.z + up_m,
+                    vt.location.z + up_m + vib_z,
                 ),
                 self.carla.Rotation(
                     pitch=vt.rotation.pitch - sp,

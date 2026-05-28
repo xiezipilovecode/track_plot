@@ -44,3 +44,10 @@ Thumbs.db
 .DS_Store
 *.tmp
 *.log
+tp_tunnel_traffic/docs/课题1.4_HoloLens跨域互操作_v3.pptx
+tp_tunnel_traffic/docs/课题1.4_HoloLens跨域互操作.pptx
+tp_tunnel_traffic/docs/课题1.4_HoloLens虚实互操作_汇报文档.md
+tp_tunnel_traffic/docs/diagram_cross_domain.png
+tp_tunnel_traffic/docs/draw_diagram.py
+tp_tunnel_traffic/docs/holo_cross_domain_v4.pptx
+tp_tunnel_traffic/docs/make_ppt.js

@@ -680,6 +680,7 @@ def main():
         hololens_server = HoloLensServer(carla, world, config) if config.hololens_enable else None
         if hololens_server is not None:
             print(f"HoloLens 推流初始化: port={config.hololens_port}")
+            HoloLensServer.set_lane_points(lane_points)
 
         def _spawn_proxy_from_plan(plan) -> bool:
             lane_index = int(plan.lane_index)

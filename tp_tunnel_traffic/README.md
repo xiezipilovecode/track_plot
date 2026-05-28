@@ -57,11 +57,17 @@
 
 ### `hololens_server.py`
 HoloLens 2 WebRTC 推流：
-- 单一世界相机（不绑定车辆），切车时无创建/销毁操作
+- 单一世界相机架构，切车时无创建/销毁操作
 - 将选中代理车驾驶员视角实时推流到 HoloLens 2（VideoStreamTrack → WebRTC）
 - 接收 HoloLens 头部旋转（yaw/pitch）驱动 CARLA 相机（DataChannel）
+- EMA 头部平滑 + 路面振动 + 隧道沉浸效果（HUD/灯节律/入口眩光）
 - 独立后台线程运行 asyncio 事件循环，不影响仿真帧率
 - 通过 GUI `HoloLens Stream` 按钮控制启停
+
+### `idm.py`
+IDM（Intelligent Driver Model）跟车算法：
+- 连续加速度函数替代三段式阈值控制
+- 消除"急刹→猛追"车流振荡
 
 ### `config.py`
 全部配置项（`TunnelTrafficConfig`），通过 `TT_*` / `TP_*` 环境变量覆盖。
@@ -145,9 +151,7 @@ Traffic Manager 集成：自动导航配置与 TM 参数设置。
 - CARLA Server 已启动（默认 `localhost:2000`）
 - 已安装依赖：`pip install pygame numpy aiortc websockets opencv-python`
 
-### 1) 一键启动（全功能）
-
-**默认已开启 GUI、代理车流、视频录制、HoloLens 推流**，无需设置环境变量：
+### 1) 一键启动（全功能，默认开启）
 
 ```bat
 call E:\Programs\miniconda\Scripts\activate.bat
@@ -156,16 +160,17 @@ cd /d E:\code\track_plot
 python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
 ```
 
-GUI 按钮行为：
-| 按钮 | 默认 | 点击后 |
-|---|---|---|
-| `Collect Selected` | OFF | ON → 帧级数据集采集 |
-| `Record Video` | OFF | ON → 连续视频录制 |
-| `HoloLens Stream` | OFF | ON → WebRTC 推流 |
+默认已开启：GUI、代理车流（65km/h，24辆车）、视频录制、HoloLens 推流。按钮默认 OFF，点击后启动。
 
-> 三个按钮互斥（同时只能一个 ON），切换代理车时自动跟随。
+### 2) 关闭某项功能
 
-### 2) 真实隧道车流参数（当前默认）
+```bat
+set TT_PROXY_ENABLE=0         rem 关代理车流
+set TT_HOLOLENS_ENABLE=0      rem 关 HoloLens 推流
+set TT_VIDEO_ENABLE=0         rem 关视频录制
+set TT_GUI_ENABLE=0           rem 关 GUI
+set TT_HOLOLENS_IMMERSIVE=0   rem 关沉浸效果
+```
 
 参考中国高速公路隧道设计规范（限速 60~80 km/h，高峰流量 1500~2000 辆/车道/小时）：
 
@@ -233,11 +238,12 @@ python -m tp_tunnel_traffic.tests.test_tunnel_autodrive
 - COCO 2D 标注：输出到 `labels_2d/coco_instances.json`（仅 vehicle 类）
 
 HoloLens 推流：
-- WebRTC VideoTrack 推流（VP8/H264），896×504 @ 30fps
-- 头部姿态通过 WebRTC DataChannel 回传
+- WebRTC VideoTrack 推流（VP8/H264），1280×720 @ 30fps
+- 头部姿态通过 WebRTC DataChannel 回传，EMA 平滑
 - 单一世界相机架构，切车无崩溃
+- 沉浸效果：HUD 仪表盘、路面振动、隧道灯节律、入口眩光（`TT_HOLOLENS_IMMERSIVE=0` 关闭）
 - GUI 按钮 "HoloLens Stream" 控制启停，跟随选中代理车视角
-- 可通过 `set TT_HOLOLENS_ENABLE=1` 开启（默认端口 8765）
+- 默认开启（`TT_HOLOLENS_ENABLE=1`），默认端口 8765
 
 快速验证（COCO/instance 输出）：
 ```bat
