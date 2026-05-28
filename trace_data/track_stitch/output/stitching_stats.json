@@ -1,0 +1,11 @@
+{
+  "total_files": 60,
+  "total_tracks_parsed": 19571,
+  "total_nodes_parsed": 149060,
+  "tracks_after_merge": 12065,
+  "matched_pairs": 7700,
+  "stitched_trajectories": 1464,
+  "unmatched_fragments": 0,
+  "interpolated_nodes": 46960,
+  "elapsed_seconds": 32.806302800000005
+}
