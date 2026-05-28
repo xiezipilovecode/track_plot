@@ -15,6 +15,16 @@ track_plot/
 ├─ auto_control_main.py             # 轨迹回放入口
 ├─ run_all_batches.bat              # 一键批量采集脚本
 ├─ tp_replay/                       # 轨迹复现核心包
+│  ├─ main.py                       # 回放主入口（env 配置 + 主循环）
+│  ├─ engine.py                     # 核心引擎（解析、对齐、调度、控制）
+│  ├─ models.py                     # 数据模型（TrackFrame / VehicleTrack）
+│  ├─ config.py                     # 默认配置（模块级变量，env 覆盖）
+│  ├─ selection.py                  # 轨迹筛选（6种模式 + spawn 调度压缩）
+│  ├─ geometry.py                   # 几何工具（角度计算 / 方向估计）
+│  ├─ env_utils.py                  # 环境变量读取工具函数
+│  ├─ world_utils.py                # CARLA 世界工具（OpenDRIVE 生成）
+│  ├─ carla_compat.py               # CARLA 兼容层（安全导入）
+│  └─ README.md                     # 模块详细文档
 ├─ tp_tunnel_traffic/               # 隧道仿真 + 数据集采集
 │  ├─ main.py                       # 隧道场景主入口
 │  ├─ collector.py                  # 帧级数据集采集器（RGB/COCO/instance）
@@ -50,25 +60,111 @@ track_plot/
 
 ## 一、轨迹复现（tp_replay）
 
-外部车辆轨迹数据在 CARLA 世界中的自动回放。
+外部车辆轨迹数据在 CARLA 世界中的自动回放。从历史单文件 `replay_main.py` 拆分而来，按职责分层为 10 个模块。
+
+> 详细文档：[tp_replay/README.md](tp_replay/README.md)
+
+### 模块结构
+
+```text
+tp_replay/
+├── main.py             # 主入口：env 覆盖 → CARLA 连接 → 主循环 → 清理
+├── engine.py           # 核心引擎：轨迹解析、坐标对齐、车辆调度、逐帧控制
+├── models.py           # 数据模型：TrackFrame（帧）、VehicleTrack（轨迹）
+├── config.py           # 默认配置（模块级变量，运行时被 env 覆盖）
+├── selection.py        # 轨迹筛选：按时长/帧数/密度/位移等条件过滤
+├── geometry.py         # 几何工具：角度计算、方向估计
+├── env_utils.py        # 环境变量读取工具函数
+├── world_utils.py      # CARLA 世界工具：OpenDRIVE 生成/保留
+└── carla_compat.py     # CARLA 兼容层：安全的 carla 导入（无 CARLA 仍可 import）
+```
 
 ### 快速开始
 
 ```powershell
 conda activate carla
 cd E:\code\track_plot
+
+# 推荐入口（仓库根目录）
 $env:TP_PRESERVE_EXISTING_WORLD='1'
 python .\auto_control_main.py
+
+# 或通过模块
+python -m tp_replay.main
 ```
+
+### 轨迹数据格式
+
+```
+每行一条轨迹，空格分隔，6 字段一组节点：
+时间戳(ms) x像素 y世界坐标(cm) 速度(km/h) 加速度 车辆类型 [重复...]
+```
+
+### 坐标对齐原理
+
+```
+原始数据(cm) → ×DATA_SCALE(0.01) → 旋转(YAW_CORRECTION) → 平移(TUNNEL_ENTRY) → CARLA 世界坐标(m)
+原始速度(km/h) → ×SPEED_FACTOR(1/3.6) → CARLA 速度(m/s)
+```
+
+引擎自动扫描数据选择最优锚点（`TP_AUTO_ANCHOR=1`），计算地图方向与数据方向的旋转角度，完成对齐。
+
+### 两种控制模式
+
+| 模式 | 机制 | 特点 |
+|------|------|------|
+| `kinematic`（默认） | 每帧 teleport 到目标位置 | 精确复现、无物理偏差、适合数据验证 |
+| `physics_follow` | 物理控制跟随目标轨迹 | 有碰撞交互、轨迹更自然、需调参 |
+
+通过 `$env:TP_REPLAY_CONTROL_MODE='physics_follow'` 切换。
+
+### 轨迹筛选模式
+
+通过 `$env:TP_SELECT_MODE` 控制，支持 6 种策略：
+
+| 模式 | 说明 |
+|------|------|
+| `none`（默认） | 使用全部轨迹 |
+| `min_duration` / `min_frames` | 按时长/帧数过滤低质量轨迹 |
+| `duration_range` | 按时长区间过滤 |
+| `top_n_duration` | 取时长最长的 N 条 |
+| `dense_window` | 时间窗口内选最密集的 N 条 |
+| `cover_window` | 选 N 条覆盖整个时间窗口 |
 
 ### 关键配置
 
 | 环境变量 | 默认值 | 说明 |
-|---|---|---|
-| `TP_DATA_FILE_PATH` | — | 轨迹数据文件 |
-| `TP_DATA_SCALE` | 0.01 | 厘米→米缩放 |
-| `TP_REVERSE_DIRECTION` | True | 隧道逆向行驶 |
-| `TP_SNAP_THRESHOLD` | 15.0 | 车道吸附距离（米） |
+|----------|--------|------|
+| `TP_DATA_FILE_PATH` | — | 轨迹数据文件（必须指定） |
+| `TP_XODR_PATH` | `QingShiLing.xodr` | OpenDRIVE 地图路径 |
+| `TP_DATA_SCALE` | `0.01` | 数据坐标→CARLA 米缩放因子 |
+| `TP_DATA_SPEED_IN_KMH` | `1` | 原始速度单位是否为 km/h |
+| `TP_REVERSE_DIRECTION` | `1` | 隧道逆向行驶 |
+| `TP_SNAP_THRESHOLD` | `15.0` | 车道吸附距离（米） |
+| `TP_PLAYBACK_SPEED` | `1.0` | 回放速度倍率 |
+| `TP_MAX_ACTIVE_VEHICLES` | `18` | 最大同时活跃车辆数 |
+| `TP_TRACK_LIMIT` | — | 限制回放车辆总数 |
+| `TP_MAX_TRAJ_TIME` | `0`（不限） | 最大回放时间（秒） |
+| `TP_FINISH_BEHAVIOR` | `teleport_away` | 轨迹结束处理 |
+| `TP_FIXED_DELTA_SECONDS` | `0.05` | 同步模式固定步长 |
+
+### 完整流程
+
+```
+Step 1: 数据质量校验 → Step 2: 地图对齐可视化 → Step 3: 正式回放
+```
+
+```powershell
+# Step 1：数据质量校验
+python .\tools\validate_trace_data.py --data-file .\data_6lu2.txt
+
+# Step 2：地图对齐可视化（蓝色=原始，绿色=吸附）
+python .\tools\trace_display.py
+
+# Step 3：正式回放
+$env:TP_PRESERVE_EXISTING_WORLD='1'
+python .\auto_control_main.py
+```
 
 ---
 
@@ -176,32 +272,7 @@ CARLA 仿真 tick
 
 ---
 
-## 四、轨迹复现详细流程
-
-### Step 1：数据质量校验
-
-```powershell
-python .\tools\validate_trace_data.py --data-file .\trace_data\test_data\data_6lu2.txt --output-dir run_logs/validator
-```
-
-### Step 2：地图对齐可视化
-
-```powershell
-python .\tools\trace_display.py
-```
-
-蓝色=原始，绿色=吸附；偏差线过长说明需调 `MANUAL_ROTATION_FIX`。
-
-### Step 3：正式回放
-
-```powershell
-$env:TP_PRESERVE_EXISTING_WORLD='1'
-python .\auto_control_main.py
-```
-
----
-
-## 五、常见问题
+## 四、常见问题
 
 | 问题 | 排查 |
 |---|---|
