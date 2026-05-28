@@ -97,13 +97,9 @@ def match_camera_pair(
     dataset_b: CameraDataset,
     config: StitchingConfig,
 ) -> List[Tuple[Trajectory, Trajectory, float]]:
-    """匈牙利算法匹配相邻两个摄像头的轨迹。
-
-    Returns:
-        [(traj_a, traj_b, cost), ...]  按代价升序排列
-    """
+    """匈牙利算法匹配相邻两个摄像头的轨迹（分批 + 去重）。"""
     if not _HAS_SCIPY:
-        logger.error("scipy not available; cannot run Hungarian matching")
+        logger.error("scipy not available")
         return []
 
     active_a = dataset_a.get_active_trajs(
@@ -116,33 +112,110 @@ def match_camera_pair(
     )
 
     if not active_a or not active_b:
-        logger.warning(
-            "No active tracks for %s ↔ %s (A=%d, B=%d)",
-            dataset_a.camera_id, dataset_b.camera_id,
-            len(active_a), len(active_b),
-        )
         return []
 
-    n_a = len(active_a)
-    n_b = len(active_b)
+    window_ms = config.time_window_minutes * 60_000
+    all_matches_raw = []
+
+    for batch_a, batch_b, _ in _partition_by_time(
+        active_a, active_b, window_ms, config.max_time_gap_ms,
+    ):
+        if not batch_a or not batch_b:
+            continue
+        batch_matches = _match_one_batch(batch_a, batch_b, config)
+        all_matches_raw.extend(batch_matches)
+
+    # 去重：每个 traj_b 最多匹配一个 traj_a（保留代价最小的）
+    best_for_b: dict = {}
+    for traj_a, traj_b, cost in all_matches_raw:
+        key = id(traj_b)
+        if key not in best_for_b or cost < best_for_b[key][2]:
+            best_for_b[key] = (traj_a, traj_b, cost)
+
+    all_matches = sorted(best_for_b.values(), key=lambda x: x[2])
+
+    total = len(all_matches)
+    logger.info(
+        "Match result %s ↔ %s: %d matched (rate=%.1f%%) [raw=%d batches]",
+        dataset_a.camera_id, dataset_b.camera_id,
+        total,
+        100.0 * total / max(1, min(len(active_a), len(active_b))),
+        len(all_matches_raw),
+    )
+    return all_matches
+
+
+def _partition_by_time(
+    active_a: list,
+    active_b: list,
+    window_ms: int,
+    max_gap_ms: int,
+):
+    """按时间窗口分批，相邻窗口有重叠以覆盖边界。"""
+    all_a = sorted(active_a, key=lambda t: t.start_time)
+    all_b = sorted(active_b, key=lambda t: t.start_time)
+
+    if not all_a:
+        return
+
+    min_time = min(all_a[0].start_time, all_b[0].start_time if all_b else float("inf"))
+    max_time = max(all_a[-1].end_time, all_b[-1].end_time if all_b else float("-inf"))
+
+    # 使用有重叠的滑动窗口
+    overlap_ms = max_gap_ms  # 窗口重叠量 = 最大匹配间隙
+    step_ms = window_ms - overlap_ms
+    if step_ms <= 0:
+        step_ms = window_ms // 2
+
+    window_start = min_time
+    while window_start < max_time:
+        window_end = window_start + window_ms + overlap_ms
+
+        # 收集窗口内的轨迹
+        batch_a = [t for t in all_a
+                    if t.start_time < window_end and t.end_time > window_start - max_gap_ms]
+        batch_b = [t for t in all_b
+                    if t.start_time < window_end and t.end_time > window_start - max_gap_ms]
+
+        if batch_a and batch_b:
+            yield batch_a, batch_b, window_start
+
+        window_start += step_ms
+
+
+def _match_one_batch(
+    batch_a: list,
+    batch_b: list,
+    config: StitchingConfig,
+) -> List[Tuple[Trajectory, Trajectory, float]]:
+    """单批匈牙利匹配。"""
+    n_a = len(batch_a)
+    n_b = len(batch_b)
     n_max = max(n_a, n_b)
 
-    # 构建代价矩阵（填充大数值到方阵）
-    cost_matrix = np.full((n_max, n_max), 1e9, dtype=np.float64)
+    # 限制单批矩阵大小（安全阀）
+    MAX_BATCH_SIZE = 5000
+    if n_max > MAX_BATCH_SIZE:
+        logger.warning(
+            "Batch too large (%d × %d), limiting to %d",
+            n_a, n_b, MAX_BATCH_SIZE,
+        )
+        batch_a = batch_a[:MAX_BATCH_SIZE]
+        batch_b = batch_b[:MAX_BATCH_SIZE]
+        n_a = len(batch_a)
+        n_b = len(batch_b)
+        n_max = max(n_a, n_b)
 
+    # 构建代价矩阵
+    cost_matrix = np.full((n_max, n_max), 1e9, dtype=np.float64)
     candidate_count = 0
-    for i, traj_a in enumerate(active_a):
-        for j, traj_b in enumerate(active_b):
+
+    for i, traj_a in enumerate(batch_a):
+        for j, traj_b in enumerate(batch_b):
             if _prefilter(traj_a, traj_b, config):
                 cost = _compute_pair_cost(traj_a, traj_b, config)
                 cost_matrix[i, j] = cost
                 candidate_count += 1
-
-    logger.info(
-        "Matching %s ↔ %s: %d×%d candidates, %d passed prefilter",
-        dataset_a.camera_id, dataset_b.camera_id,
-        n_a, n_b, candidate_count,
-    )
 
     # 匈牙利算法
     row_ind, col_ind = _hungarian(cost_matrix)
@@ -153,15 +226,7 @@ def match_camera_pair(
         if r < n_a and c < n_b:
             cost_val = cost_matrix[r, c]
             if cost_val < config.max_acceptable_cost:
-                matches.append((active_a[r], active_b[c], float(cost_val)))
-
-    matches.sort(key=lambda x: x[2])
-    logger.info(
-        "Match result %s ↔ %s: %d matched (rate=%.1f%%)",
-        dataset_a.camera_id, dataset_b.camera_id,
-        len(matches),
-        100.0 * len(matches) / max(1, min(n_a, n_b)),
-    )
+                matches.append((batch_a[r], batch_b[c], float(cost_val)))
 
     return matches
 

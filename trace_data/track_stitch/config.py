@@ -76,7 +76,7 @@ class StitchingConfig:
     interp_small_gap_ms: int = 5_000  # 小间隙用线性插值
 
     # ── 性能 ──
-    max_files_to_scan: int = 20       # 快速扫描模式（0=全部）
+    max_files_to_scan: int = 0       # 快速扫描模式（0=全部）
     batch_size: int = 1_000           # 批量处理轨迹数
 
     # ── 输出 ──

@@ -68,8 +68,10 @@ def main() -> None:
         config.max_files_to_scan = 10  # 每摄像头 10 个文件
         logger.info("Quick scan mode: %d files per camera", config.max_files_to_scan)
 
-    if args.max_files > 0:
+    if args.max_files >= 0:
         config.max_files_to_scan = args.max_files
+        if args.max_files == 0:
+            logger.info("Full scan mode: all files")
 
     logger.info("Data root: %s", config.data_root)
     logger.info("Output dir: %s", config.output_dir)

@@ -1,11 +1,11 @@
 {
-  "total_files": 60,
-  "total_tracks_parsed": 19571,
-  "total_nodes_parsed": 149060,
-  "tracks_after_merge": 12065,
-  "matched_pairs": 7700,
-  "stitched_trajectories": 1464,
+  "total_files": 3186,
+  "total_tracks_parsed": 908314,
+  "total_nodes_parsed": 6814954,
+  "tracks_after_merge": 565006,
+  "matched_pairs": 355082,
+  "stitched_trajectories": 70397,
   "unmatched_fragments": 0,
-  "interpolated_nodes": 46960,
-  "elapsed_seconds": 32.806302800000005
+  "interpolated_nodes": 2235190,
+  "elapsed_seconds": 806.368552
 }
