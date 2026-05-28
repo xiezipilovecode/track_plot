@@ -80,9 +80,9 @@ def _run_stitch_autopilot(world, client, engine, settings) -> None:
         world.tick()
         active_cnt = autopilot.tick(fixed_dt)
         tick_idx += 1
+        s = autopilot.stats  # 确保 s 在每次迭代都定义（避免条件块内赋值导致未定义）
 
         if tick_idx % max(1, int(config.PRINT_EVERY_N_TICKS)) == 0:
-            s = autopilot.stats
             print(
                 f"\rTime: {s['current_time']:.1f}s | Active: {s['active']} "
                 f"| Spawned: {s['spawned']} | Finished: {s['finished']} "
@@ -91,7 +91,6 @@ def _run_stitch_autopilot(world, client, engine, settings) -> None:
             )
 
         if tick_idx % max(1, int(config.STATUS_LOG_EVERY_N_TICKS)) == 0:
-            s = autopilot.stats
             logger.info(
                 "Status: time=%.1fs active=%d pending=%d spawned=%d finished=%d failures=%d",
                 s["current_time"], s["active"], s["pending"],
