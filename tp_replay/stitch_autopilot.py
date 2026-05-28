@@ -164,9 +164,11 @@ class StitchAutopilot:
         """配置 TM 自动驾驶参数。"""
         tm_port = int(config.STITCH_TM_PORT)
         vehicle.set_autopilot(True, tm_port)
-        self.tm.ignore_lights_percentage(vehicle, 100.0)
-        self.tm.ignore_signs_percentage(vehicle, 100.0)
-        self.tm.auto_lane_change(vehicle, False)
+
+        # 从 config 读取参数（非硬编码）
+        self.tm.ignore_lights_percentage(vehicle, 100.0 if config.STITCH_TM_IGNORE_LIGHTS else 0.0)
+        self.tm.ignore_signs_percentage(vehicle, 100.0 if config.STITCH_TM_IGNORE_SIGNS else 0.0)
+        self.tm.auto_lane_change(vehicle, bool(config.STITCH_TM_AUTO_LANE_CHANGE))
 
         fwd_speed_pct = self._tm_speed_pct(vehicle, self._speed_limit_mps * 0.5)
         self.tm.vehicle_percentage_speed_difference(vehicle, fwd_speed_pct)

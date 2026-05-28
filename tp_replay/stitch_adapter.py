@@ -169,7 +169,7 @@ class StitchAdapter:
             loc = self._to_world(float(x), float(y), ds, ca, sa)
             snap_loc, snap_rot = self._snap_to_road(loc)
 
-            # 速度：km/h → m/s
+            # 速度：km/h → m/s（拼接 JSON 中的 speed 字段与原始数据一致，单位 km/h）
             speed_raw = node.get("speed")
             if speed_raw is not None:
                 try:
@@ -202,5 +202,9 @@ class StitchAdapter:
                     frame = TrackFrame(ts=rel_time, loc=snap_loc, rot=snap_rot, v=last_v_mps)
                     track.add_frame(frame)
                     break
+
+        # 设置 end_time 为速度曲线的最后一个时间点（关键！否则车辆立即被销毁）
+        if track.speed_profile:
+            track.end_time = track.speed_profile[-1][0]
 
         return track if track.frames else None
