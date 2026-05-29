@@ -1,169 +1,140 @@
-"""拼接轨迹隧道测试脚本。
-
-加载拼接 JSON，选择一条高质量轨迹，在 CARLA 隧道中生成车辆，
-spectator 跟随该车行驶，用于验证拼接结果与仿真车道的对应情况。
-
-用法：
-    set TP_STITCH_JSON_PATH=E:\code\track_plot\trace_data\track_stitch\output\stitched_trajectories.json
-    python -m tp_replay.tests.test_stitch_autopilot
-"""
+"""拼接轨迹平滑回放。"""
 
 from __future__ import annotations
-
-import logging
-import math
-import os
-import sys
-
+import json, math, os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 from tp_replay import config
 from tp_replay.carla_compat import require_carla
 from tp_replay.engine import ReplayEngine
-from tp_replay.stitch_adapter import StitchAdapter
-from tp_replay.stitch_autopilot import StitchAutopilot
 
-logger = logging.getLogger(__name__)
-
+CAMS = {"TV023":(231,76,60),"TV024":(52,152,219),"TV025":(46,204,113),
+        "TV026":(155,89,182),"TV027":(243,156,18),"TV028":(211,84,0),"INTERP":(160,160,160)}
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
     carla = require_carla()
-    stitch_json = os.getenv("TP_STITCH_JSON_PATH", "")
-    if not stitch_json:
-        print("请设置 TP_STITCH_JSON_PATH 环境变量")
-        return
+    js=os.getenv("TP_STITCH_JSON_PATH","")
+    if not js: print("set TP_STITCH_JSON_PATH"); return
+    c=carla.Client(os.getenv("TP_CARLA_HOST","localhost"),int(os.getenv("TP_CARLA_PORT","2000")))
+    c.set_timeout(15.0); w=c.get_world()
+    s=w.get_settings(); s.synchronous_mode=True; s.fixed_delta_seconds=0.05; w.apply_settings(s)
 
-    # ── 连接 CARLA ──
-    host = os.getenv("TP_CARLA_HOST", "localhost")
-    port = int(os.getenv("TP_CARLA_PORT", "2000"))
-    client = carla.Client(host, port)
-    client.set_timeout(15.0)
-    world = client.get_world()
+    eng=ReplayEngine(c,config.XODR_PATH)
+    anchor=os.getenv("TP_DATA_FILE_PATH",config.DATA_FILE_PATH)
+    if anchor and os.path.exists(anchor): eng.process_data(anchor)
 
-    # ── 同步模式 ──
-    settings = world.get_settings()
-    settings.synchronous_mode = True
-    settings.fixed_delta_seconds = 0.05
-    world.apply_settings(settings)
+    ca=getattr(eng,"_stitch_cos_a",1.0); sa=getattr(eng,"_stitch_sin_a",0.0)
+    ox=getattr(eng,"_stitch_off_x",0.0); oy=getattr(eng,"_stitch_off_y",0.0)
+    ds=getattr(eng,"_data_start_point",(0.0,0.0))
+    sc=float(config.DATA_SCALE); sy=float(config.SCALE_Y)
 
-    # ── 用锚点文件计算坐标变换参数 ──
-    anchor_file = os.getenv("TP_DATA_FILE_PATH", config.DATA_FILE_PATH)
-    if not anchor_file or not os.path.exists(anchor_file):
-        print(f"锚点文件不存在: {anchor_file}")
-        return
+    with open(js,"r",encoding="utf-8") as f: data=json.load(f)
+    # 选第 N 条高质量轨迹（默认第 1 条，可通过 TP_STITCH_NTH 环境变量切换）
+    nth = int(os.getenv("TP_STITCH_NTH","1"))
+    candidates=[t for t in sorted(data["trajectories"],key=lambda x:x["quality_score"],reverse=True)
+                if t["camera_count"]>=6 and t["quality_score"]>0.85]
+    st=candidates[min(nth-1,len(candidates)-1)] if candidates else None
+    if not st: print("无轨迹"); return
+    nodes=st["nodes"]
+    print(f"轨迹: {st['trajectory_id']} Q={st['quality_score']:.3f} {st['vehicle_type']} {len(nodes)}节点")
 
-    engine = ReplayEngine(client, config.XODR_PATH)
-    engine.process_data(anchor_file)
-    engine.pending_tracks = []
+    real_xs=[(i,n.get("x")) for i,n in enumerate(nodes) if n.get("x") and abs(float(n.get("x",0)))>=1.0]
+    for i,n in enumerate(nodes):
+        if n.get("x") is None or abs(float(n.get("x",0)))<1.0:
+            before=[rx for rx in real_xs if rx[0]<i]; after=[rx for rx in real_xs if rx[0]>i]
+            if before and after:
+                bi,bx=before[-1]; ai,ax=after[0]; n["x"]=float(bx)+(float(ax)-float(bx))*(i-bi)/(ai-bi)
+            elif before: n["x"]=float(before[-1][1])
+            elif after: n["x"]=float(after[0][1])
 
-    print(f"地图方向: {engine.map_angle:.2f}°")
-    print(f"锚点: ({engine.entry_loc.x:.1f}, {engine.entry_loc.y:.1f}, {engine.entry_loc.z:.1f})")
+    def tw(x,y):
+        rx=(x-ds[0])*sc; ry=(y-ds[1])*sc*sy
+        return carla.Location(rx*ca-ry*sa+eng.entry_loc.x+ox, rx*sa+ry*ca+eng.entry_loc.y+oy, eng.entry_loc.z+1.0)
 
-    # ── 加载拼接轨迹 ──
-    adapter = StitchAdapter(engine)
-    all_tracks = adapter.load_and_convert(stitch_json, min_quality=0.7, min_cameras=3, max_tracks=50)
+    raw_pts=[]; snapped=[]
+    for n in nodes:
+        y=n["y"]; x=n.get("x") or ds[0]
+        raw=tw(float(x),float(y)); raw_pts.append(raw)
+        snap=raw
+        try:
+            wp=eng.map.get_waypoint(raw,project_to_road=True,lane_type=carla.LaneType.Driving)
+            if wp: snap=wp.transform.location; snap.z+=0.5
+        except: pass
+        snapped.append((snap, n.get("camera","INTERP"), n.get("speed",0)))
 
-    # 只取前 5 分钟内开始的轨迹
-    all_tracks = sorted(all_tracks, key=lambda t: t.start_time)
-    first_ts = all_tracks[0].start_time if all_tracks else 0
-    tracks = [t for t in all_tracks if t.start_time - first_ts < 300.0]  # 5 分钟窗口
+    segs=[]
+    for i in range(len(raw_pts)-1):
+        d=raw_pts[i].distance(raw_pts[i+1])
+        spd_a=snapped[i][2]; spd_b=snapped[i+1][2]
+        segs.append((d, max(0.1,spd_a), max(0.1,spd_b)))
+    total_dist=sum(s[0] for s in segs)
+    print(f"总距离: {total_dist:.0f}m, {len(segs)}段")
 
-    if not tracks:
-        print("没有找到符合条件的轨迹")
-        return
+    w.tick(); pl=None
+    for pt,cam,_ in snapped:
+        rgb=CAMS.get(cam,(180,180,180))
+        if pl: w.debug.draw_line(pl,pt,thickness=0.04,color=carla.Color(*rgb),life_time=10.0)
+        pl=pt
 
-    print(f"\n加载 {len(tracks)} 条轨迹（前 5 分钟窗口）")
+    p0=snapped[0][0]; p1=snapped[1][0]
+    yaw0=(math.degrees(math.atan2(p1.y-p0.y,p1.x-p0.x))+180)%360
+    bp=w.get_blueprint_library().find("vehicle.tesla.model3")
+    if bp is None: bp=w.get_blueprint_library().filter("vehicle.*")[0]
+    bp.set_attribute("role_name","test")
+    v=w.try_spawn_actor(bp,carla.Transform(p0,carla.Rotation(yaw=yaw0)))
+    for off in [5,10,20,50] if v is None else []:
+        pp=carla.Location(p0.x,p0.y+off,p0.z)
+        v=w.try_spawn_actor(bp,carla.Transform(pp,carla.Rotation(yaw=yaw0)))
+    if v is None: print("spawn fail"); return
 
-    # 打印首条轨迹详情
-    t = tracks[0]
-    print(f"\n首条轨迹详情:")
-    print(f"  ID: {t.id}")
-    print(f"  类型: {t.type_str}")
-    print(f"  首帧时间: {t.start_time:.1f}s")
-    print(f"  末帧时间: {t.end_time:.1f}s")
-    print(f"  时长: {t.end_time - t.start_time:.1f}s")
-    print(f"  速度点数: {len(getattr(t, 'speed_profile', []))}")
-    if t.frames:
-        f = t.frames[0]
-        print(f"  Spawn 位置: ({f.loc.x:.1f}, {f.loc.y:.1f}, {f.loc.z:.1f})")
-        print(f"  Spawn 速度: {f.v:.1f} m/s ({f.v*3.6:.1f} km/h)")
-
-    # ── TM 初始化 ──
-    tm_port = int(os.getenv("TP_STITCH_TM_PORT", "8000"))
-    tm = client.get_trafficmanager(tm_port)
-    tm.set_synchronous_mode(True)
-    tm.set_global_distance_to_leading_vehicle(5.0)
-
-    # ── 生成第一辆车并跟随 ──
-    bp_lib = world.get_blueprint_library()
-    bp = bp_lib.find("vehicle.tesla.model3")
-    bp.set_attribute("role_name", "stitch_test")
-
-    t = tracks[0]
-    spawn_frame = t.frames[0]
-    spawn_loc = spawn_frame.loc
-    spawn_rot = spawn_frame.rot
-
-    print(f"\n尝试生成车辆 @ ({spawn_loc.x:.1f}, {spawn_loc.y:.1f}, {spawn_loc.z:.1f})")
-    transform = carla.Transform(spawn_loc, spawn_rot)
-    vehicle = world.try_spawn_actor(bp, transform)
-
-    if vehicle is None:
-        print("生成失败！尝试偏移位置...")
-        # 尝试在附近找路点
-        wp = engine.map.get_waypoint(spawn_loc, project_to_road=True, lane_type=carla.LaneType.Driving)
-        if wp:
-            spawn_loc = wp.transform.location
-            spawn_loc.z += 0.5
-            print(f"  吸附到车道: ({spawn_loc.x:.1f}, {spawn_loc.y:.1f}, {spawn_loc.z:.1f})")
-            transform = carla.Transform(spawn_loc, wp.transform.rotation)
-            vehicle = world.try_spawn_actor(bp, transform)
-
-    if vehicle is None:
-        print("仍然失败，退出")
-        return
-
-    print(f"车辆已生成: {vehicle.id}")
-
-    # 启用 autopilot
-    vehicle.set_autopilot(True, tm_port)
-    tm.ignore_lights_percentage(vehicle, 100.0)
-    tm.auto_lane_change(vehicle, False)
-
-    # ── Spectator 跟随 ──
-    print("\nSpectator 跟随车辆，按 Ctrl+C 退出...")
-    spectator = world.get_spectator()
+    spec=w.get_spectator()
+    sim_dist=0.0; idx=0; smooth_yaw=yaw0; completed=False
 
     try:
-        tick = 0
-        while True:
-            world.tick()
-            tick += 1
+        while not completed:
+            w.tick()
+            if idx>=len(segs): completed=True; break
 
-            # Spectator 跟随车辆后方上方
-            v_transform = vehicle.get_transform()
-            v_forward = v_transform.get_forward_vector()
-            cam_loc = carla.Location(
-                v_transform.location.x - v_forward.x * 8,
-                v_transform.location.y - v_forward.y * 8,
-                v_transform.location.z + 5,
-            )
-            spectator.set_transform(carla.Transform(cam_loc, v_transform.rotation))
+            seg_d,spd_a,spd_b=segs[idx]
+            alpha0=sim_dist/max(seg_d,0.001)
+            cur_spd_kmh=spd_a+(spd_b-spd_a)*min(1.0,alpha0)
+            step=cur_spd_kmh/3.6*0.05
+            sim_dist+=step
 
-            if tick % 100 == 0:
-                v = vehicle.get_velocity()
-                speed = math.sqrt(v.x**2 + v.y**2 + v.z**2) * 3.6
-                print(f"  tick={tick} speed={speed:.1f} km/h "
-                      f"pos=({v_transform.location.x:.0f},{v_transform.location.y:.0f})")
+            while idx<len(segs) and sim_dist>seg_d:
+                sim_dist-=seg_d; idx+=1
+                if idx<len(segs): seg_d,spd_a,spd_b=segs[idx]
+            if idx>=len(segs): completed=True
+            i=min(idx,len(segs)-1)
+            alpha=max(0,min(1,sim_dist/max(seg_d,0.001)))
+            sp0,_,_=snapped[i]; sp1,_,_=snapped[min(i+1,len(snapped)-1)]
 
-    except KeyboardInterrupt:
-        print("\n退出")
+            ix=sp0.x+(sp1.x-sp0.x)*alpha; iy=sp0.y+(sp1.y-sp0.y)*alpha
+            # yaw: 路点方向 + 180（REVERSE_DIRECTION 修正）
+            try:
+                wp=eng.map.get_waypoint(carla.Location(ix,iy,sp0.z),
+                    project_to_road=True,lane_type=carla.LaneType.Driving)
+                raw_yaw=(wp.transform.rotation.yaw+180)%360 if wp else 0
+            except: raw_yaw=0
+
+            diff=(raw_yaw-smooth_yaw+180)%360-180; smooth_yaw+=diff*0.3
+
+            v.set_transform(carla.Transform(
+                carla.Location(ix,iy,sp0.z), carla.Rotation(yaw=smooth_yaw)))
+
+            rad=math.radians(smooth_yaw)
+            spec.set_transform(carla.Transform(
+                carla.Location(ix-math.cos(rad)*8,iy-math.sin(rad)*8,sp0.z+4),
+                carla.Rotation(pitch=-8,yaw=smooth_yaw)))
+
+            if int(sim_dist*10)%20==0:
+                pct=sum(s[0] for s in segs[:idx])/total_dist*100
+                print(f"  {pct:.0f}% {cur_spd_kmh:.0f}km/h yaw={smooth_yaw:.0f}",end="\r")
+
+        print("\n完成 | Ctrl+C 退出")
+        while True: w.tick()
+    except KeyboardInterrupt: print("\n退出")
     finally:
-        vehicle.destroy()
-        world.apply_settings(world.get_settings())
+        if v.is_alive: v.destroy()
+        w.apply_settings(w.get_settings())
 
-
-if __name__ == "__main__":
-    main()
+if __name__=="__main__": main()
