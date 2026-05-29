@@ -19,6 +19,60 @@ from .models import TrackFrame, VehicleTrack
 logger = logging.getLogger(__name__)
 
 
+def _smooth_interp_speed(nodes: list, idx: int):
+    """用前后实测节点的速度平滑插值点速度。"""
+    before = after = None
+    for j in range(idx - 1, -1, -1):
+        if not nodes[j].get("interpolated", False) and nodes[j].get("speed"):
+            before = nodes[j]["speed"]
+            break
+    for j in range(idx + 1, len(nodes)):
+        if not nodes[j].get("interpolated", False) and nodes[j].get("speed"):
+            after = nodes[j]["speed"]
+            break
+    if before is not None and after is not None:
+        return (float(before) + float(after)) / 2.0
+    return before or after
+
+
+def _densify_frames(frames, engine, carla_module, max_gap_m=3.0):
+    """帧间距 > max_gap_m 时沿路点链插入中间帧，避免弯道切线穿墙。"""
+    if len(frames) < 2:
+        return frames
+    result = [frames[0]]
+    for i in range(len(frames) - 1):
+        a, b = frames[i], frames[i + 1]
+        dist = a.loc.distance(b.loc)
+        if dist <= max_gap_m:
+            result.append(b)
+            continue
+        # 沿路点链插值中间点
+        try:
+            wpa = engine.map.get_waypoint(a.loc, project_to_road=True, lane_type=carla_module.LaneType.Driving)
+            if not wpa:
+                result.append(b); continue
+            cur = wpa; remaining = dist
+            n_steps = 0
+            while remaining > max_gap_m and n_steps < 20:
+                nxt = list(cur.next(2.0))
+                if not nxt:
+                    nxt = list(cur.previous(2.0))  # REVERSE_DIRECTION fallback
+                if not nxt: break
+                cur = nxt[0]; remaining -= 2.0; n_steps += 1
+                # 插入中间帧
+                t_frac = 1.0 - remaining / max(dist, 0.01)
+                mid_ts = a.ts + (b.ts - a.ts) * t_frac
+                mid_v = a.v + (b.v - a.v) * t_frac
+                mid_loc = carla_module.Location(cur.transform.location.x, cur.transform.location.y, cur.transform.location.z)
+                mid_rot = cur.transform.rotation
+                mid_frame = type(a)(ts=mid_ts, loc=mid_loc, rot=mid_rot, v=mid_v)
+                result.append(mid_frame)
+        except Exception:
+            pass
+        result.append(b)
+    return result
+
+
 class StitchAdapter:
     """拼接轨迹数据 → VehicleTrack 适配器。
 
@@ -253,6 +307,13 @@ class StitchAdapter:
         track.stitch_cameras = st.get("camera_count", 0)
         last_v_mps = 0.0
 
+        # 平滑插值点速度：用前后实测节点的平均速度替代
+        for i, node in enumerate(nodes):
+            if node.get("interpolated", False):
+                speed_raw = _smooth_interp_speed(nodes, i)
+                if speed_raw is not None:
+                    node["speed"] = speed_raw
+
         for node in nodes:
             ts = node.get("timestamp")
             if ts is None:
@@ -279,5 +340,8 @@ class StitchAdapter:
 
             frame = TrackFrame(ts=rel_time, loc=snap_loc, rot=snap_rot, v=v_mps)
             track.add_frame(frame)
+
+        # 弯道插值：帧间距>3m时沿路点链插入中间帧，避免切线穿墙
+        track.frames = _densify_frames(track.frames, self.engine, self.carla)
 
         return track if len(track.frames) >= 2 else None
