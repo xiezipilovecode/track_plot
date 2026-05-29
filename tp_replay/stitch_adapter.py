@@ -138,7 +138,7 @@ class StitchAdapter:
 
     def _to_vehicle_track(self, st: dict, tid: int, gts: float,
                           ds: tuple, ca: float, sa: float) -> Optional[VehicleTrack]:
-        """单条拼接轨迹 → VehicleTrack（含速度曲线）。"""
+        """单条拼接轨迹 → VehicleTrack（仅 spawn 帧 + 速度曲线，给 TM autopilot 用）。"""
         nodes = st.get("nodes", [])
         valid_nodes = [n for n in nodes if not n.get("interpolated", False) and n.get("y") is not None]
         if not valid_nodes:
@@ -161,7 +161,6 @@ class StitchAdapter:
             rel_time = (float(ts) - gts) / 1000.0
             y = node.get("y", 0.0)
 
-            # x 处理：插值节点用 data_start x 代替，后续靠车道吸附纠正
             x = node.get("x")
             if x is None or abs(float(x)) < 1.0:
                 x = ds[0]
@@ -169,7 +168,6 @@ class StitchAdapter:
             loc = self._to_world(float(x), float(y), ds, ca, sa)
             snap_loc, snap_rot = self._snap_to_road(loc)
 
-            # 速度：km/h → m/s（拼接 JSON 中的 speed 字段与原始数据一致，单位 km/h）
             speed_raw = node.get("speed")
             if speed_raw is not None:
                 try:
@@ -180,17 +178,14 @@ class StitchAdapter:
             else:
                 v_mps = last_v_mps
 
-            # 首帧（非插值节点）作为生成状态
             if not first_frame_set and not node.get("interpolated", False):
                 frame = TrackFrame(ts=rel_time, loc=snap_loc, rot=snap_rot, v=v_mps)
                 track.add_frame(frame)
                 first_frame_set = True
 
-            # 速度曲线
             track.speed_profile.append((rel_time, v_mps))
 
         if not track.frames:
-            # 回退：用第一个有效节点
             for node in nodes:
                 if not node.get("interpolated", False):
                     ts = node.get("timestamp", gts)
@@ -203,8 +198,86 @@ class StitchAdapter:
                     track.add_frame(frame)
                     break
 
-        # 设置 end_time 为速度曲线的最后一个时间点（关键！否则车辆立即被销毁）
         if track.speed_profile:
             track.end_time = track.speed_profile[-1][0]
 
         return track if track.frames else None
+
+    # ── 全帧模式（供引擎 kinematic 回放使用） ──────────────────
+
+    def load_for_kinematic(
+        self,
+        json_path: str,
+        min_quality: float = 0.5,
+        min_cameras: int = 2,
+        max_tracks: Optional[int] = None,
+    ) -> List[VehicleTrack]:
+        """加载拼接 JSON，构建全帧 VehicleTrack（每节点一个 TrackFrame）。
+
+        供引擎的 kinematic 模式使用——每个节点都被路点吸附后作为 TrackFrame，
+        引擎的 _update_track 会按时间插值驱动车辆平滑行驶。
+        """
+        raw = self._load_json(json_path)
+        logger.info("Loaded %d stitched trajectories", len(raw))
+        filtered = self._filter(raw, min_quality, min_cameras, max_tracks)
+        logger.info("Filtered to %d", len(filtered))
+
+        global_min_ts = self._global_min_ts(filtered)
+        self.engine.global_start_time_raw = global_min_ts
+
+        cos_a, sin_a = self._transform_params()
+        data_start = self._data_start()
+
+        tracks = []
+        for i, st_data in enumerate(filtered):
+            vt = self._to_full_vehicle_track(st_data, i, global_min_ts, data_start, cos_a, sin_a)
+            if vt and vt.frames:
+                tracks.append(vt)
+
+        logger.info("Built %d full-frame VehicleTracks for kinematic replay", len(tracks))
+        return tracks
+
+    def _to_full_vehicle_track(self, st: dict, tid: int, gts: float,
+                                ds: tuple, ca: float, sa: float) -> Optional[VehicleTrack]:
+        """单条拼接轨迹 → 全帧 VehicleTrack（每个节点都是 TrackFrame）。
+
+        引擎的 kinematic 模式会在相邻帧间插值，实现平滑行驶。
+        """
+        nodes = st.get("nodes", [])
+        if len(nodes) < 2:
+            return None
+
+        vtype = st.get("vehicle_type", "car")
+        track = VehicleTrack(vehicle_id=f"ST_{tid:06d}", type_str=vtype)
+        track.stitch_quality = st.get("quality_score", 0)
+        track.stitch_cameras = st.get("camera_count", 0)
+        last_v_mps = 0.0
+
+        for node in nodes:
+            ts = node.get("timestamp")
+            if ts is None:
+                continue
+            rel_time = (float(ts) - gts) / 1000.0
+
+            y = node.get("y", 0.0)
+            x = node.get("x")
+            if x is None or abs(float(x)) < 1.0:
+                x = ds[0]
+
+            loc = self._to_world(float(x), float(y), ds, ca, sa)
+            snap_loc, snap_rot = self._snap_to_road(loc)
+
+            speed_raw = node.get("speed")
+            if speed_raw is not None:
+                try:
+                    v_mps = float(speed_raw) * float(config.SPEED_FACTOR)
+                    last_v_mps = v_mps
+                except (ValueError, TypeError):
+                    v_mps = last_v_mps
+            else:
+                v_mps = last_v_mps
+
+            frame = TrackFrame(ts=rel_time, loc=snap_loc, rot=snap_rot, v=v_mps)
+            track.add_frame(frame)
+
+        return track if len(track.frames) >= 2 else None

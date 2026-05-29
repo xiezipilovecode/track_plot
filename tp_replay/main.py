@@ -34,6 +34,95 @@ from .world_utils import _maybe_generate_opendrive_world
 logger = logging.getLogger(__name__)
 
 
+def _run_stitch_kinematic(world, client, engine, settings) -> None:
+    """拼接轨迹 kinematic 回放模式。
+
+    用引擎原生的 kinematic tick 驱动全帧 VehicleTrack，
+    引擎内置的路点吸附、插值、yaw gating 保证平滑行驶。
+    """
+    from .stitch_adapter import StitchAdapter
+
+    stitch_json = os.getenv("TP_STITCH_JSON_PATH") or config.STITCH_JSON_PATH
+    if not stitch_json:
+        _info("错误：stitch_kinematic 模式需要设置 TP_STITCH_JSON_PATH")
+        return
+
+    # Phase 1: 锚点数据 → 计算坐标变换参数
+    anchor_file = config.DATA_FILE_PATH
+    if not anchor_file or not os.path.exists(anchor_file):
+        _info(f"警告：锚点文件不存在 {anchor_file}，使用默认变换")
+    else:
+        engine.process_data(anchor_file)
+        engine.pending_tracks = []
+
+    # Phase 2: 加载拼接轨迹（全帧模式——每节点一个 TrackFrame）
+    adapter = StitchAdapter(engine)
+    stitch_tracks = adapter.load_for_kinematic(
+        stitch_json,
+        min_quality=_get_float_from_env("TP_STITCH_MIN_QUALITY", float(config.STITCH_MIN_QUALITY)),
+        min_cameras=_get_int_from_env("TP_STITCH_MIN_CAMERAS", int(config.STITCH_MIN_CAMERAS)),
+        max_tracks=_get_int_from_env("TP_TRACK_LIMIT", 0) or None,
+    )
+    if not stitch_tracks:
+        _info("错误：未加载到有效的拼接轨迹")
+        return
+
+    # 时间窗口过滤
+    max_start_s = _get_float_from_env("TP_STITCH_MAX_START_S", 600.0)
+    stitch_tracks = sorted(stitch_tracks, key=lambda t: t.start_time)
+    earliest = stitch_tracks[0].start_time if stitch_tracks else 0.0
+    stitch_tracks = [t for t in stitch_tracks if t.start_time - earliest < max_start_s]
+    _info(f"Time-filtered: {len(stitch_tracks)} tracks in first {max_start_s}s")
+
+    # 设置 spawn 时间（引擎的 spawn 调度依赖此字段）
+    for t in stitch_tracks:
+        t.next_spawn_time = t.start_time
+
+    engine.pending_tracks = stitch_tracks
+    _try_set_spectator_view(world, engine)
+
+    _info(f"Stitch-Kinematic: {len(stitch_tracks)} trajectories | "
+          f"max_active={config.MAX_ACTIVE_VEHICLES}")
+
+    # Phase 3: 引擎原生主循环
+    fixed_dt = float(settings.fixed_delta_seconds)
+    tick_idx = 0
+
+    while True:
+        world.tick()
+        active_cnt = engine.tick(fixed_dt)
+        tick_idx += 1
+
+        if tick_idx % max(1, int(config.PRINT_EVERY_N_TICKS)) == 0:
+            print(
+                f"\rTrajTime: {engine.current_traj_time:.2f}s | Active: {active_cnt} "
+                f"| SpawnOK: {engine.stats.get('spawn_success',0)} "
+                f"| SpawnFail: {engine.stats['spawn_failures']} "
+                f"| Finished: {engine.stats.get('finished_tracks',0)} "
+                f"| Pending: {len(engine.pending_tracks)}   ",
+                end="",
+            )
+
+        if tick_idx % max(1, int(config.STATUS_LOG_EVERY_N_TICKS)) == 0:
+            logger.info(
+                "Status: time=%.2fs active=%d pending=%d spawned=%d finished=%d",
+                engine.current_traj_time, active_cnt,
+                len(engine.pending_tracks),
+                engine.stats.get("spawn_success", 0),
+                engine.stats.get("finished_tracks", 0),
+            )
+
+        if not engine.pending_tracks and active_cnt == 0:
+            if config.MAX_TRAJ_TIME_SECONDS and engine.current_traj_time < float(config.MAX_TRAJ_TIME_SECONDS):
+                continue
+            _info("\nStitch-Kinematic playback finished.")
+            break
+
+        if config.MAX_TRAJ_TIME_SECONDS and engine.current_traj_time >= float(config.MAX_TRAJ_TIME_SECONDS):
+            _info(f"\nStop: reached TP_MAX_TRAJ_TIME")
+            break
+
+
 def _run_stitch_autopilot(world, client, engine, settings) -> None:
     """TM 自动驾驶模式：拼接轨迹 → TM 自动驾驶回放。"""
     from .stitch_adapter import StitchAdapter
@@ -506,8 +595,11 @@ def main() -> None:
 
         engine = ReplayEngine(client, config.XODR_PATH)
 
-        # —— Stitch-Autopilot 模式 ——
+        # —— 拼接轨迹回放模式 ——
         replay_mode = _get_str_from_env("TP_REPLAY_MODE", "kinematic").strip().lower()
+        if replay_mode == "stitch_kinematic":
+            _run_stitch_kinematic(world, client, engine, settings)
+            return
         if replay_mode == "stitch_autopilot":
             _run_stitch_autopilot(world, client, engine, settings)
             return

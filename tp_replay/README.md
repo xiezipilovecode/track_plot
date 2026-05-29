@@ -361,3 +361,68 @@ tp_replay/
 3. **模块级 config**：运行时被 env 覆盖，保持与历史单文件脚本的行为兼容
 4. **坐标对齐自动锚点**：`TP_AUTO_ANCHOR=1` 自动扫描数据选择最优对齐参数
 5. **Spawning 策略**：重叠检测 + 候选点偏移 + 跨车道尝试 + 重试冷却 = 高成功率生成
+
+---
+
+## 拼接轨迹回放系统
+
+从 `trace_data/track_stitch/` 输出的拼接 JSON 数据，直接在 CARLA 隧道中回放。
+
+> **坐标系统**：拼接 JSON 中的 y 坐标与原始数据一致（世界 cm），通过 `DATA_SCALE=0.01 → 旋转 → 平移` 变换到 CARLA 坐标。此变换链与 `engine.process_data()` 完全一致。
+
+> **前提**：stitch 模式需要 `TP_DATA_FILE_PATH` 指向一个锚点文件，用于计算坐标变换参数。
+
+### 架构
+
+```
+stitched_trajectories.json (70K 轨迹)
+        │
+        ▼ StitchAdapter.load_for_kinematic()
+        │   ├── JSON → 坐标变换（复用 engine 变换参数）
+        │   ├── 逐节点路点吸附
+        │   └── 构建全帧 VehicleTrack
+        │
+        ▼ ReplayEngine.tick()（engine 原生 kinematic 驱动）
+            ├── 帧间插值平滑行驶
+            ├── yaw gating 防闪烁
+            └── 自动 spawn/despawn
+```
+
+### 启动方式
+
+**方式 1：stitch_kinematic 模式（推荐）**
+
+```bat
+set TP_REPLAY_MODE=stitch_kinematic
+set TP_STITCH_JSON_PATH=E:\code\track_plot\trace_data\track_stitch\output\stitched_trajectories.json
+set TP_STITCH_MIN_QUALITY=0.7
+set TP_STITCH_MIN_CAMERAS=4
+set TP_TRACK_LIMIT=20
+set TP_STITCH_MAX_START_S=600
+python auto_control_main.py
+```
+
+**方式 2：测试脚本（单条轨迹验证）**
+
+```bat
+set TP_STITCH_JSON_PATH=E:\code\track_plot\trace_data\track_stitch\output\stitched_trajectories.json
+set TP_STITCH_NTH=1
+python -m tp_replay.tests.test_stitch_autopilot
+```
+
+**方式 3：stitch_autopilot 模式（TM 自动驾驶）**
+
+```bat
+set TP_REPLAY_MODE=stitch_autopilot
+set TP_STITCH_JSON_PATH=E:\code\track_plot\trace_data\track_stitch\output\stitched_trajectories.json
+set TP_STITCH_TM_MAX_ACTIVE=20
+python auto_control_main.py
+```
+
+### 核心模块
+
+| 文件 | 功能 |
+|------|------|
+| `stitch_adapter.py` | JSON→VehicleTrack，含全帧模式和速度曲线模式 |
+| `stitch_autopilot.py` | TM 自动驾驶编排器（spawn/speed/destroy） |
+| `tests/test_stitch_autopilot.py` | 单条轨迹测试脚本 |
