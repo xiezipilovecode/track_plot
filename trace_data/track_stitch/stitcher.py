@@ -180,8 +180,9 @@ class Stitcher:
                 stitched = self._chain_to_stitched(
                     chain, traj_id,
                 )
-                stitched_list.append(stitched)
-                traj_id += 1
+                if self._check_y_monotonic(stitched, max_rev=0):
+                    stitched_list.append(stitched)
+                    traj_id += 1
 
         logger.info(
             "Chained %d trajectories from %d starting fragments",
@@ -193,6 +194,14 @@ class Stitcher:
         )
 
         return stitched_list
+
+    def _check_y_monotonic(self, stitched: StitchedTrajectory, max_rev: int = 5) -> bool:
+        """检查轨迹 y 坐标是否单调递增。"""
+        if len(stitched.nodes) < 2:
+            return True
+        revs = sum(1 for i in range(len(stitched.nodes)-1)
+                    if stitched.nodes[i+1].y < stitched.nodes[i].y)
+        return revs <= max_rev
 
     def _build_chain(
         self,
@@ -239,6 +248,16 @@ class Stitcher:
                 this_cam = traj.camera_id
                 stitched.matched_pairs.append((prev_cam, this_cam, cost))
 
+        # 按 y 坐标排序节点（隧道单向行驶，y 单调递增 = 行驶方向）
+        stitched.nodes.sort(key=lambda n: (n.timestamp, n.y))
+        # 去重：移除同一时间戳的重复节点（保留第一个）
+        seen_ts = set()
+        deduped = []
+        for n in stitched.nodes:
+            if n.timestamp not in seen_ts:
+                seen_ts.add(n.timestamp)
+                deduped.append(n)
+        stitched.nodes = deduped
         return stitched
 
     # ── 盲区插值 ────────────────────────────────────────────

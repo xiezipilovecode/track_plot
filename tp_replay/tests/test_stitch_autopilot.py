@@ -7,6 +7,12 @@ from tp_replay import config
 from tp_replay.carla_compat import require_carla
 from tp_replay.engine import ReplayEngine
 
+def _check_monotonic(traj, max_rev=3):
+    """检查轨迹 y 坐标是否单调递增（允许少量反向）。"""
+    nodes=traj.get("nodes",[])
+    revs=sum(1 for i in range(len(nodes)-1) if nodes[i+1]["y"]<nodes[i]["y"])
+    return revs<=max_rev
+
 def main():
     carla=require_carla()
     js=os.getenv("TP_STITCH_JSON_PATH","")
@@ -28,7 +34,8 @@ def main():
     with open(js,"r",encoding="utf-8") as f: data=json.load(f)
     all_trajs=data.get("trajectories",data if isinstance(data,list) else [])
     candidates=[t for t in sorted(all_trajs,key=lambda x:x["quality_score"],reverse=True)
-                 if t["camera_count"]>=5 and t["quality_score"]>0.7]
+                 if t["camera_count"]>=5 and t["quality_score"]>0.7
+                 and _check_monotonic(t)]
     st_data=candidates[min(nth-1,len(candidates)-1)] if candidates else None
     if not st_data: print("无轨迹"); return
     nodes=st_data["nodes"]

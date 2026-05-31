@@ -34,6 +34,178 @@ from .world_utils import _maybe_generate_opendrive_world
 logger = logging.getLogger(__name__)
 
 
+def _run_stitch_simple(world, client, engine, settings) -> None:
+    """拼接轨迹回放——简单直接：逐 tick 插值 drive，与单车测试逻辑一致。"""
+    carla = require_carla()
+    stitch_json = os.getenv("TP_STITCH_JSON_PATH") or config.STITCH_JSON_PATH
+    if not stitch_json:
+        _info("错误：需要设置 TP_STITCH_JSON_PATH")
+        return
+
+    anchor_file = config.DATA_FILE_PATH
+    if not anchor_file or not os.path.exists(anchor_file):
+        _info(f"警告：锚点文件不存在 {anchor_file}")
+    else:
+        engine.process_data(anchor_file)
+        engine.pending_tracks = []
+
+    ca = engine._stitch_cos_a; sa = engine._stitch_sin_a
+    ox = engine._stitch_off_x; oy = engine._stitch_off_y
+    ds = engine._data_start_point
+    sc = float(config.DATA_SCALE); sy = float(config.SCALE_Y)
+
+    # ── 加载 + 过滤 ──
+    import json
+    with open(stitch_json, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    all_trajs = data.get("trajectories", data if isinstance(data, list) else [])
+    min_q = _get_float_from_env("TP_STITCH_MIN_QUALITY", 0.5)
+    min_c = _get_int_from_env("TP_STITCH_MIN_CAMERAS", 2)
+    max_t = _get_int_from_env("TP_TRACK_LIMIT", 0) or None
+
+    def _mono(t):
+        nodes = t.get("nodes", [])
+        return sum(1 for i in range(len(nodes)-1) if nodes[i+1]["y"] < nodes[i]["y"]) == 0
+
+    candidates = [t for t in sorted(all_trajs, key=lambda x: x["quality_score"], reverse=True)
+                  if t["quality_score"] >= min_q and t["camera_count"] >= min_c and _mono(t)]
+    if max_t: candidates = candidates[:max_t]
+    if not candidates: _info("无轨迹"); return
+
+    # 时间窗口过滤
+    max_start_s = _get_float_from_env("TP_STITCH_MAX_START_S", 600.0)
+    candidates = sorted(candidates, key=lambda t: t["nodes"][0]["timestamp"])
+    gts = candidates[0]["nodes"][0]["timestamp"]
+    candidates = [t for t in candidates if (t["nodes"][0]["timestamp"] - gts) / 1000.0 < max_start_s]
+    _info(f"加载 {len(candidates)} 条轨迹")
+
+    # ── 全部转为世界坐标路点 ──
+    all_wpts = {}  # traj_id -> [(loc, spd_kmh, cam)]
+    for st in candidates:
+        wpts = []
+        for n in st["nodes"]:
+            y = n["y"]; x = n.get("x") or ds[0]
+            rx = (x - ds[0]) * sc; ry = (y - ds[1]) * sc * sy
+            loc = carla.Location(rx*ca - ry*sa + engine.entry_loc.x + ox,
+                                  rx*sa + ry*ca + engine.entry_loc.y + oy,
+                                  engine.entry_loc.z)
+            try:
+                wp = engine.map.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+                if wp: loc = wp.transform.location
+            except: pass
+            wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
+        all_wpts[id(st)] = wpts
+
+    # ── Spawn 调度 ──
+    bp_lib = world.get_blueprint_library()
+    bp = bp_lib.find("vehicle.tesla.model3")
+    if bp is None: bp = bp_lib.filter("vehicle.*")[0]
+    bp.set_attribute("role_name", "stitch")
+
+    pending = list(candidates)  # 待生成
+    active = {}     # actor -> (traj, wpts, idx, sim_dist, smooth_yaw, segs)
+    max_active = _get_int_from_env("TP_STITCH_TM_MAX_ACTIVE", 25)
+
+    _try_set_spectator_view(world, engine)
+    fixed_dt = float(settings.fixed_delta_seconds)
+    _info(f"回放中...")
+    tick_idx = 0
+
+    try:
+        while pending or active:
+            world.tick()
+            tick_idx += 1
+
+            # Spawn 到期车辆
+            sim_time = tick_idx * fixed_dt * float(config.PLAYBACK_SPEED)
+            spawn_this_tick = []
+            for st in list(pending):
+                first_ts = st["nodes"][0]["timestamp"]
+                if (first_ts - gts) / 1000.0 <= sim_time and len(active) < max_active:
+                    pending.remove(st)
+                    spawn_this_tick.append(st)
+                else:
+                    break  # pending 已按时间排序，后面的更晚
+
+            for st in spawn_this_tick:
+                wpts = all_wpts[id(st)]
+                p0, p1 = wpts[0][0], wpts[1][0]
+                yaw0 = math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x))
+                # 往前走 1 个路点避开入口边缘
+                try:
+                    wp = engine.map.get_waypoint(p0, project_to_road=True, lane_type=carla.LaneType.Driving)
+                    if wp:
+                        nxt = list(wp.previous(2.0))
+                        if nxt:
+                            p0 = carla.Location(nxt[0].transform.location.x, nxt[0].transform.location.y, nxt[0].transform.location.z)
+                            yaw0 = nxt[0].transform.rotation.yaw
+                except: pass
+                actor = world.try_spawn_actor(bp, carla.Transform(p0, carla.Rotation(yaw=yaw0)))
+                if actor is None:
+                    for off in [5, 10, 20]:
+                        pp = carla.Location(p0.x, p0.y + off, p0.z)
+                        actor = world.try_spawn_actor(bp, carla.Transform(pp, carla.Rotation(yaw=yaw0)))
+                        if actor: break
+                if actor is None: continue
+                # 预计算段
+                segs = []
+                for i in range(len(wpts) - 1):
+                    d = wpts[i][0].distance(wpts[i + 1][0])
+                    spd = max(0.1, (wpts[i][1] + wpts[i + 1][1]) / 2) / 3.6
+                    segs.append((d, spd))
+                active[actor.id] = (st, wpts, 0, 0.0, yaw0, segs)
+
+            # 更新活跃车辆
+            to_remove = []
+            for aid, (st, wpts, idx, sim_dist, smooth_yaw, segs) in list(active.items()):
+                actor = world.get_actor(aid) if hasattr(world, 'get_actor') else None
+                if actor is None or not actor.is_alive:
+                    to_remove.append(aid); continue
+
+                if idx >= len(segs):
+                    to_remove.append(aid); continue
+
+                seg_d, seg_spd = segs[idx]
+                step = seg_spd * fixed_dt * float(config.PLAYBACK_SPEED)
+                sim_dist += step
+
+                while idx < len(segs) and sim_dist > seg_d:
+                    sim_dist -= seg_d; idx += 1
+                    if idx < len(segs): seg_d, seg_spd = segs[idx]
+
+                if idx >= len(segs):
+                    # 终点：保持最后一帧位置
+                    last_pt = wpts[-1][0]
+                    actor.set_transform(carla.Transform(last_pt, carla.Rotation(yaw=smooth_yaw)))
+                    to_remove.append(aid); continue
+
+                alpha = max(0, min(1, sim_dist / max(seg_d, 0.01)))
+                p0, p1 = wpts[idx][0], wpts[min(idx + 1, len(wpts) - 1)][0]
+                ix = p0.x + (p1.x - p0.x) * alpha
+                iy = p0.y + (p1.y - p0.y) * alpha
+                raw_yaw = math.degrees(math.atan2(p1.y - p0.y, p1.x - p0.x))
+                diff = (raw_yaw - smooth_yaw + 180) % 360 - 180
+                smooth_yaw += diff * 0.3
+
+                actor.set_transform(carla.Transform(carla.Location(ix, iy, p0.z), carla.Rotation(yaw=smooth_yaw)))
+                active[aid] = (st, wpts, idx, sim_dist, smooth_yaw, segs)
+
+            for aid in to_remove: del active[aid]
+
+            if tick_idx % 20 == 0:
+                print(f"\rt={tick_idx*fixed_dt:.0f}s active={len(active)} pending={len(pending)}", end="")
+
+        _info("\n回放完成")
+    except KeyboardInterrupt:
+        _info("\n退出")
+    finally:
+        for aid in list(active.keys()):
+            try:
+                a = world.get_actor(aid)
+                if a and a.is_alive: a.destroy()
+            except: pass
+
+
 def _run_stitch_kinematic(world, client, engine, settings) -> None:
     """拼接轨迹 kinematic 回放模式。
 
@@ -597,6 +769,9 @@ def main() -> None:
 
         # —— 拼接轨迹回放模式 ——
         replay_mode = _get_str_from_env("TP_REPLAY_MODE", "kinematic").strip().lower()
+        if replay_mode == "stitch_simple":
+            _run_stitch_simple(world, client, engine, settings)
+            return
         if replay_mode == "stitch_kinematic":
             _run_stitch_kinematic(world, client, engine, settings)
             return
