@@ -3,9 +3,8 @@
   "total_tracks_parsed": 908314,
   "total_nodes_parsed": 6814954,
   "tracks_after_merge": 565006,
-  "matched_pairs": 355082,
-  "stitched_trajectories": 27919,
-  "unmatched_fragments": 0,
-  "interpolated_nodes": 602970,
-  "elapsed_seconds": 848.7792538
+  "matched_pairs": 355177,
+  "stitched_trajectories": 335307,
+  "interpolated_nodes": 2362250,
+  "elapsed_seconds": 9147.1801942
 }

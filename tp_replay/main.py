@@ -47,6 +47,7 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
         engine.pending_tracks = []
     # 流式读取 trajectory，选取一条高质量轨迹
     def _iter_js_trajs(path):
+        decoder = json.JSONDecoder()
         with open(path, "r", encoding="utf-8") as fh:
             buf = ""
             while True:
@@ -59,36 +60,19 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
                     continue
                 arr = buf.find('[', idx)
                 if arr == -1: continue
-                rest = buf[arr + 1:]
-                obj_buf = ""; depth = 0; started = False
-                for ch in rest:
-                    if ch == '{':
-                        if depth == 0 and started: obj_buf = '{'
-                        depth += 1; started = True
-                    elif ch == '}':
-                        depth -= 1
-                        if depth == 0 and obj_buf:
-                            obj_buf += ch
-                            yield json.loads(obj_buf)
-                            obj_buf = ""
-                            continue
-                    if started and depth > 0: obj_buf += ch
-                while True:
+                buf = buf[arr + 1:]
+                break
+            while True:
+                buf = buf.lstrip()
+                if not buf or buf[0] == ']': break
+                try:
+                    obj, end = decoder.raw_decode(buf)
+                    yield obj
+                    buf = buf[end:]
+                except json.JSONDecodeError:
                     chunk = fh.read(65536)
                     if not chunk: break
-                    for ch in chunk:
-                        if ch == '{':
-                            if depth == 0 and obj_buf: obj_buf = '{'
-                            depth += 1; started = True
-                        elif ch == '}':
-                            depth -= 1
-                            if depth == 0 and obj_buf:
-                                obj_buf += ch
-                                yield json.loads(obj_buf)
-                                obj_buf = ""
-                                continue
-                        if started and depth > 0: obj_buf += ch
-                break
+                    buf += chunk
     trajs = _iter_js_trajs(stitch_json)
     nth = _get_int_from_env("TP_STITCH_NTH", 1)
     # 流式挑选：边读边筛，找到第 N 条高质量轨迹即停
@@ -266,11 +250,15 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
 
     # ── Phase 2: 加载 & 过滤（流式解析，避免 2GB JSON 全部加载到内存）──
     def _iter_trajs(path):
+        decoder = json.JSONDecoder()
         with open(path, "r", encoding="utf-8") as fh:
             buf = ""
+            _info("  搜索 trajectories 数组...")
             while True:
                 chunk = fh.read(65536)
-                if not chunk: return
+                if not chunk:
+                    _info("  警告: 未找到 trajectories 数组")
+                    return
                 buf += chunk
                 idx = buf.find('"trajectories"')
                 if idx == -1:
@@ -278,53 +266,58 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                     continue
                 arr = buf.find('[', idx)
                 if arr == -1: continue
-                # 找到 trajectories 数组，从 '[' 之后按括号深度解析
-                rest = buf[arr + 1:]
-                obj_buf = ""; depth = 0; started = False
-                for ch in rest:
-                    if ch == '{':
-                        if depth == 0 and started: obj_buf = '{'
-                        depth += 1; started = True
-                    elif ch == '}':
-                        depth -= 1
-                        if depth == 0 and obj_buf:
-                            obj_buf += ch
-                            yield json.loads(obj_buf)
-                            obj_buf = ""
-                            continue
-                    if started and depth > 0: obj_buf += ch
-                # 继续读剩余文件
-                while True:
+                buf = buf[arr + 1:]
+                _info(f"  找到 trajectories 数组 (buf={len(buf)} bytes)")
+                break
+            while True:
+                buf = buf.lstrip()
+                if not buf or buf[0] == ']': break
+                try:
+                    obj, end = decoder.raw_decode(buf)
+                    yield obj
+                    buf = buf[end:]
+                except json.JSONDecodeError:
                     chunk = fh.read(65536)
                     if not chunk: break
-                    for ch in chunk:
-                        if ch == '{':
-                            if depth == 0 and obj_buf: obj_buf = '{'
-                            depth += 1; started = True
-                        elif ch == '}':
-                            depth -= 1
-                            if depth == 0 and obj_buf:
-                                obj_buf += ch
-                                yield json.loads(obj_buf)
-                                obj_buf = ""
-                                continue
-                        if started and depth > 0: obj_buf += ch
+                    buf += chunk
+                idx = buf.find('"trajectories"')
+                if idx == -1:
+                    if len(buf) > 200000: buf = buf[-100000:]
+                    continue
+                arr = buf.find('[', idx)
+                if arr == -1: continue
+                buf = buf[arr + 1:]  # skip to after '['
                 break
+            # 从 '[' 之后逐对象解析
+            while True:
+                buf = buf.lstrip()
+                if not buf or buf[0] == ']': break
+                try:
+                    obj, end = decoder.raw_decode(buf)
+                    yield obj
+                    buf = buf[end:]
+                except json.JSONDecodeError:
+                    chunk = fh.read(65536)
+                    if not chunk: break
+                    buf += chunk
     all_trajs = _iter_trajs(stitch_json)
     min_q = _get_float_from_env("TP_STITCH_MIN_QUALITY", float(config.STITCH_MIN_QUALITY))
     min_c = _get_int_from_env("TP_STITCH_MIN_CAMERAS", int(config.STITCH_MIN_CAMERAS))
     max_n = _get_int_from_env("TP_TRACK_LIMIT", 200) or 999999
     time_win = _get_float_from_env("TP_STITCH_MAX_START_S", 600.0)
 
-    # 流式加载 + 内联过滤：够数即停，不读完整 2GB 文件
+    _info("开始流式加载轨迹...")
     filtered = []
     global_min_ts = None
+    count = 0
     for t in _iter_trajs(stitch_json):
+        count += 1
+        if count % 500 == 0:
+            _info(f"  已扫描 {count} 条...")
         if t.get("quality_score", 0) < min_q: continue
         if t.get("camera_count", 0) < min_c: continue
         ts = t["nodes"][0]["timestamp"] / 1000.0
-        if global_min_ts is None:
-            global_min_ts = ts
+        if global_min_ts is None: global_min_ts = ts
         if ts - global_min_ts > time_win: continue
         filtered.append(t)
         if len(filtered) >= max_n: break
