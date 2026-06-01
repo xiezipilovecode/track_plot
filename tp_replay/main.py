@@ -252,6 +252,11 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             lid = assign_lane(n0.get("x"), n0.get("camera_id", ""), clusters)
             lane_cnt[lid] = lane_cnt.get(lid, 0) + 1
         _info(f"x→车道分布: 左-1:{lane_cnt['-1']} 中-2:{lane_cnt['-2']} 右-3:{lane_cnt['-3']} (共{len(filtered)}条)")
+    else:
+        _info("警告: clusters为空! 检查节点字段:")
+        for t in filtered[:1]:
+            for j, n in enumerate(t["nodes"][:3]):
+                _info(f"  node[{j}] keys={list(n.keys())} x={n.get('x')} cam_id={n.get('camera_id','?')}")
     if clusters:
         _info(f"x→车道聚类完成: {len(clusters)} 个摄像头")
 
