@@ -116,6 +116,18 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
                 if wp: loc = wp.transform.location
             except Exception: pass
         wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
+    # 找到第一个能投影到 CARLA 道路上的路点作为 spawn 起点
+    first_good = 0
+    for i in range(min(20, len(wpts))):
+        try:
+            wp = engine.map.get_waypoint(wpts[i][0], project_to_road=True,
+                                          lane_type=carla.LaneType.Driving)
+            if wp:
+                wpts[i] = (wp.transform.location, wpts[i][1], wpts[i][2])
+                first_good = i; break
+        except Exception: pass
+    if first_good > 0:
+        wpts = wpts[first_good:]
     segs=[]
     for i in range(len(wpts)-1):
         d=wpts[i][0].distance(wpts[i+1][0])
@@ -325,6 +337,19 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 except Exception: pass
             wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
 
+        if len(wpts) < 2: continue
+        # 找到第一个能投影到 CARLA 道路上的路点作为 spawn 起点
+        first_good = 0
+        for i in range(min(20, len(wpts))):
+            try:
+                wp = engine.map.get_waypoint(wpts[i][0], project_to_road=True,
+                                              lane_type=carla.LaneType.Driving)
+                if wp:
+                    wpts[i] = (wp.transform.location, wpts[i][1], wpts[i][2])
+                    first_good = i; break
+            except Exception: pass
+        if first_good > 0:
+            wpts = wpts[first_good:]
         if len(wpts) < 2: continue
         states.append(_VS(t["trajectory_id"], wpts, stime, t.get("vehicle_type", "car")))
 
