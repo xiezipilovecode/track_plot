@@ -49,6 +49,12 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
     from .lane_align import load_lane_paths, cluster_x_to_lanes, assign_lane, find_closest_lane_point
     try:
         lane_paths = load_lane_paths(config.XODR_PATH)
+        _info(f"车道路径加载成功: -1: {len(lane_paths.get('-1',[]))}, -2: {len(lane_paths.get('-2',[]))}, -3: {len(lane_paths.get('-3',[]))} 点/车道")
+        for lid in ("-1","-2","-3"):
+            lp = lane_paths.get(lid, [])
+            if lp:
+                ys = [p[1] for p in lp]
+                _info(f"  车道{lid}: Y范围 [{min(ys):.0f}, {max(ys):.0f}] 入口Y={engine.entry_loc.y:.0f}")
     except Exception as e:
         _info(f"警告：车道路径加载失败 ({e})，回退原方案")
         lane_paths = None
@@ -89,12 +95,19 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
             if lp:
                 rx = (float(n.get("x") or ds[0]) - ds[0]) * sc
                 ry = (float(n.get("y", 0)) - ds[1]) * sc * sy
+                rough_x = rx * ca - ry * sa + engine.entry_loc.x + ox
                 rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
                 px, py, pz, _ = find_closest_lane_point(rough_y, lp)
-                loc = carla.Location(px, py, pz)
+                lane_dist = math.hypot(px - rough_x, py - rough_y)
+                if lane_dist > 30.0:
+                    n_lane = None
+                else:
+                    loc = carla.Location(px, py, pz)
             else:
                 loc = carla.Location(engine.entry_loc.x, engine.entry_loc.y, engine.entry_loc.z)
-        else:
+        if n_lane is not None and lane_paths:
+            pass
+        elif n_lane is None:
             y_n = n["y"]
             x_n = n.get("x") or ds[0]
             rx = (x_n - ds[0]) * sc
@@ -199,6 +212,12 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
     try:
         lane_paths = load_lane_paths(config.XODR_PATH)
         _info(f"车道路径加载成功: -1: {len(lane_paths.get('-1',[]))}, -2: {len(lane_paths.get('-2',[]))}, -3: {len(lane_paths.get('-3',[]))} 点/车道")
+        # 诊断：各车道Y范围
+        for lid in ("-1","-2","-3"):
+            lp = lane_paths.get(lid, [])
+            if lp:
+                ys = [p[1] for p in lp]
+                _info(f"  车道{lid}: Y范围 [{min(ys):.0f}, {max(ys):.0f}] 入口Y={engine.entry_loc.y:.0f}")
     except Exception as e:
         _info(f"警告：车道路径加载失败 ({e})，回退原方案")
         lane_paths = None
@@ -281,12 +300,21 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 if lp:
                     rx = (float(n.get("x") or ds[0]) - ds[0]) * sc
                     ry = (float(n.get("y", 0)) - ds[1]) * sc * sy
+                    rough_x = rx * ca - ry * sa + engine.entry_loc.x + ox
                     rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
                     px, py, pz, _ = find_closest_lane_point(rough_y, lp)
-                    loc = carla.Location(px, py, pz)
+                    # 安全检查：车道点距离 rough 位置 > 30m 说明越界，回退原方案
+                    lane_dist = math.hypot(px - rough_x, py - rough_y)
+                    if lane_dist > 30.0:
+                        _info(f"  警告: 车道路径越界 rough=({rough_x:.0f},{rough_y:.0f}) lane=({px:.0f},{py:.0f}) dist={lane_dist:.0f}m，回退原变换")
+                        n_lane = None
+                    else:
+                        loc = carla.Location(px, py, pz)
                 else:
                     loc = carla.Location(engine.entry_loc.x, engine.entry_loc.y, engine.entry_loc.z)
-            else:
+            if n_lane is not None and lane_paths:
+                pass  # 已在上面设置 loc
+            elif n_lane is None:
                 # 回退：原坐标变换
                 y_n = n["y"]
                 x_n = n.get("x") or ds[0]
