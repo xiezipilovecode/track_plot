@@ -8,6 +8,7 @@
 - 自动对齐数据坐标系与 CARLA 地图坐标系（角度旋转 + 位置平移 + 缩放）
 - 按轨迹时间轴自动调度车辆生成（spawn）和销毁（destroy）
 - 支持物理跟随（physics_follow）和运动学直控（kinematic）两种回放模式
+- **拼接轨迹回放**：`stitch_kinematic` 多车 PID 路点跟随自动驾驶 + `stitch_simple` 单车验证
 - 丰富的轨迹筛选机制（按时长/帧数/密度窗口/位移等条件过滤）
 - 完整的回放统计与日志输出
 
@@ -46,31 +47,36 @@ TrajTime: 12.50s | Active: 5 | Teleports: 42 | SpawnOK: 8 | ...
 
 ```text
 tp_replay/
-├── __init__.py         # 包入口，延迟导入，避免无 CARLA 环境时 import 报错
-├── main.py             # 主入口：env 覆盖、CARLA 连接、回放主循环、清理
-├── engine.py           # 核心引擎：轨迹解析、坐标对齐、车辆调度、逐帧控制
-├── models.py           # 数据模型：TrackFrame（帧）、VehicleTrack（轨迹）
-├── config.py           # 默认配置（模块级变量，运行时被 env 覆盖）
-├── selection.py        # 轨迹筛选：按时长/帧数/密度/位移等条件过滤
-├── geometry.py         # 几何工具：角度计算、方向估计、点数提取
-├── env_utils.py        # 环境变量读取工具函数
-├── world_utils.py      # CARLA 世界工具：OpenDRIVE 生成/保留
-└── carla_compat.py     # CARLA 兼容层：安全的 carla 导入
+├── __init__.py              # 包入口，延迟导入，避免无 CARLA 环境时 import 报错
+├── main.py                  # 主入口：env 覆盖、CARLA 连接、回放主循环、stitch 模式
+├── engine.py                # 核心引擎：轨迹解析、坐标对齐、车辆调度、逐帧控制
+├── models.py                # 数据模型：TrackFrame（帧）、VehicleTrack（轨迹）
+├── config.py                # 默认配置（模块级变量，运行时被 env 覆盖）
+├── selection.py             # 轨迹筛选：按时长/帧数/密度/位移等条件过滤
+├── geometry.py              # 几何工具：角度计算、方向估计、点数提取
+├── env_utils.py             # 环境变量读取工具函数
+├── world_utils.py           # CARLA 世界工具：OpenDRIVE 生成/保留
+├── carla_compat.py          # CARLA 兼容层：安全的 carla 导入
+├── stitch_adapter.py        # 拼接轨迹适配器：JSON → VehicleTrack
+├── stitch_autopilot.py      # TM 自动驾驶编排器
+└── tests/
+    └── test_stitch_autopilot.py  # 拼接轨迹单车测试脚本
 ```
 
 ## 各模块详解
 
-### `main.py` — 主入口（570 行）
+### `main.py` — 主入口（~994 行）
 
-**职责**：薄入口层，串联 env → config → CARLA 连接 → engine 初始化 → 主循环 → 清理。
+**职责**：薄入口层，串联 env → config → CARLA 连接 → engine 初始化 → 主循环 → 清理。同时包含拼接轨迹回放的三个模式函数。
 
 核心流程：
 1. `_apply_env_overrides_to_config()` — 用环境变量覆盖所有 config 默认值
-2. `main()` — 连接 CARLA、设置同步模式、创建 `ReplayEngine`、进入 `while world.tick()` 主循环
-3. 主循环中每 tick 调用 `engine.tick(fixed_dt)` 推进回放
-4. 周期性打印控制台进度（`TrajTime / Active / SpawnOK / SpawnFail / ...`）
-5. 支持 `TP_MAX_TRAJ_TIME` 提前终止、`POST_PLAYBACK_HOLD_SECONDS` 结束后保持
-6. 异常安全：`KeyboardInterrupt` 友好退出，`finally` 中销毁所有车辆并恢复 world settings
+2. `main()` — 连接 CARLA、设置同步模式、创建 `ReplayEngine`
+3. 根据 `TP_REPLAY_MODE` 分发到不同回放模式：
+   - `kinematic` / `physics_follow` → engine 原生回放
+   - `stitch_kinematic` → 多车 PID 路点跟随自动驾驶
+   - `stitch_simple` → 单车 teleport 验证
+   - `stitch_autopilot` → 旧版 TM 自动驾驶
 
 **关键子功能**：
 - `_try_set_spectator_view()` — 从 JSON 文件加载观众视角，或自动计算隧道入口最佳观察角度
@@ -190,7 +196,7 @@ tp_replay/
 
 ## 控制模式
 
-### `kinematic` 模式（默认）
+### `kinematic` 模式（默认 — 原始轨迹回放）
 
 **直接 teleport**：每帧将车辆瞬间移动到目标位置和朝向。
 
@@ -202,6 +208,27 @@ tp_replay/
 - `TELEPORT_CONSECUTIVE_TICKS=3` — 连续 N tick 偏差过大才触发 teleport
 - `TELEPORT_COOLDOWN_TICKS=10` — teleport 后冷却，避免抖动
 - `TELEPORT_YAW_GATE_DEG=12` — 朝向偏差阈值
+
+### `stitch_kinematic` 模式（拼接轨迹回放 — 推荐）
+
+**PID 路点跟随自动驾驶**：物理开启，每帧计算 steering（朝向下一路点）和 throttle/brake（匹配目标速度），通过 `apply_control()` 驱动车辆。
+
+- ✅ 车辆有物理效果（悬挂、车轮转动）
+- ✅ 轨迹跟随精度高
+- ✅ 按原始时间戳错开 spawn，支持大批量轨迹
+- ❌ 无碰撞避免（当前版本）
+- ❌ 路点间距大时需调参
+
+**PID 参数**（可通过环境变量调整）：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `TP_PID_STEER_KP` | `2.0` | 转向 P 增益，越大转弯越激进 |
+| `TP_PID_SPEED_KP` | `0.05` | 油门 P 增益 |
+| `TP_PID_SPEED_BRAKE_KP` | `0.1` | 刹车 P 增益 |
+| `TP_PID_WAYPOINT_THRESHOLD_M` | `4.0` | 路点到达判定距离（米） |
+
+通过 `TP_REPLAY_MODE=stitch_kinematic` 启用。详见[拼接轨迹回放系统](#拼接轨迹回放系统)。
 
 ### `physics_follow` 模式
 
@@ -368,61 +395,156 @@ tp_replay/
 
 从 `trace_data/track_stitch/` 输出的拼接 JSON 数据，直接在 CARLA 隧道中回放。
 
-> **坐标系统**：拼接 JSON 中的 y 坐标与原始数据一致（世界 cm），通过 `DATA_SCALE=0.01 → 旋转 → 平移` 变换到 CARLA 坐标。此变换链与 `engine.process_data()` 完全一致。
+> **坐标系统**：拼接 JSON 中的 y 坐标与原始数据一致（世界 cm），通过 `DATA_SCALE=0.01 → 旋转 → 平移` 变换到 CARLA 坐标。此变换链与 `engine.process_data()` 完全一致。详见[轨迹对齐方案](#轨迹对齐方案)。
 
-> **前提**：stitch 模式需要 `TP_DATA_FILE_PATH` 指向一个锚点文件，用于计算坐标变换参数。
+> **前提**：stitch 模式需要 `TP_DATA_FILE_PATH` 指向一个锚点文件（如 `trace_data/test_data/data_6lu2.txt`），用于计算坐标变换参数。
 
-### 架构
+### 回放模式
+
+通过 `TP_REPLAY_MODE` 切换：
+
+| 模式 | 机制 | 车辆数 | 适用场景 |
+|------|------|--------|----------|
+| `stitch_simple` | 单车 teleport（`set_simulate_physics(False)`） | 1 | 单条轨迹验证 |
+| `stitch_kinematic` | **多车 PID 路点跟随自动驾驶**（推荐） | N | 全轨迹回放 |
+| `stitch_autopilot` | TM 自动驾驶旧版（保留） | N | 测试对比 |
+
+### `stitch_kinematic` 架构（当前实现）
 
 ```
 stitched_trajectories.json (70K 轨迹)
         │
-        ▼ StitchAdapter.load_for_kinematic()
-        │   ├── JSON → 坐标变换（复用 engine 变换参数）
-        │   ├── 逐节点路点吸附
-        │   └── 构建全帧 VehicleTrack
+        ▼ Phase 1: 锚点 & 坐标变换
+        │   engine.process_data(anchor_file) → cos_a, sin_a, off_x, off_y
         │
-        ▼ ReplayEngine.tick()（engine 原生 kinematic 驱动）
-            ├── 帧间插值平滑行驶
-            ├── yaw gating 防闪烁
-            └── 自动 spawn/despawn
+        ▼ Phase 2: 加载 & 过滤
+        │   quality_score / camera_count / time_window / track_limit
+        │
+        ▼ Phase 3: 构建每车路点
+        │   ├── 逐节点坐标变换 + 路点投影 (project_to_road)
+        │   ├── 入口防护：跳过无效路点 + 沿路点链进深 (TP_SPAWN_MIN_ENTRY_DIST_M)
+        │   └── 车型 → CARLA 蓝图映射
+        │
+        ▼ Phase 4: 主循环
+            ├── 按原始时间戳错开 spawn（最多 TP_STITCH_TM_MAX_ACTIVE 辆并发）
+            ├── Steering: P 控制器朝向目标路点 (KP_steer=2.0)
+            ├── Speed: P 控制器匹配目标速度 (KP_speed=0.05, KP_brake=0.1)
+            └── 路点到达阈值: 4m 内自动前进下一路点
 ```
+
+### 车型映射
+
+拼接数据中的 7 种车型自动映射到 CARLA 蓝图：
+
+| 拼接车型 | CARLA 蓝图 | 说明 |
+|---------|-----------|------|
+| `car` | `vehicle.tesla.model3` | 轿车 |
+| `truck` | `vehicle.carlamotors.carlacola` | 卡车 |
+| `tanker` | `vehicle.carlamotors.carlacola` | 油罐车（无对应，用卡车） |
+| `van` | `vehicle.volkswagen.t2` | 面包车 |
+| `bus` | `vehicle.carlamotors.carlacola` | 巴士（无对应，用卡车） |
+| `pika` | `vehicle.ford.mustang` | 皮卡 |
+| `motorbike` | `vehicle.harley-davidson.low_rider` | 摩托车 |
+
+> 找不到对应蓝图时自动回退到任意 `vehicle.*` 类型。
+
+### 入口防护
+
+防止车辆在隧道入口边缘/外部生成导致掉落：
+
+1. 路点投影状态跟踪：每个路点记录 `get_waypoint` 是否成功返回道路点
+2. 跳过无效起始路点：扫描前 10 个路点，找到第一个成功投影到道路的
+3. 进深推进：从有效路点起沿路点链前进 `TP_SPAWN_MIN_ENTRY_DIST_M`（默认 5m），确保 spawn 在隧道内部
+4. 无效轨迹跳过：前 10 个路点全部无法投影的轨迹直接丢弃
 
 ### 启动方式
 
-**方式 1：stitch_kinematic 模式（推荐）**
+**方式 1：stitch_kinematic 多车回放（推荐）**
 
 ```bat
 set TP_REPLAY_MODE=stitch_kinematic
 set TP_STITCH_JSON_PATH=E:\code\track_plot\trace_data\track_stitch\output\stitched_trajectories.json
-set TP_STITCH_MIN_QUALITY=0.7
-set TP_STITCH_MIN_CAMERAS=4
-set TP_TRACK_LIMIT=20
+set TP_DATA_FILE_PATH=E:\code\track_plot\trace_data\test_data\data_6lu2.txt
+set TP_STITCH_TM_MAX_ACTIVE=30
 set TP_STITCH_MAX_START_S=600
+set TP_SPAWN_MIN_ENTRY_DIST_M=5
 python auto_control_main.py
 ```
 
-**方式 2：测试脚本（单条轨迹验证）**
+**方式 2：stitch_simple 单车验证**
+
+```bat
+set TP_REPLAY_MODE=stitch_simple
+set TP_STITCH_JSON_PATH=E:\code\track_plot\trace_data\track_stitch\output\stitched_trajectories.json
+set TP_DATA_FILE_PATH=E:\code\track_plot\trace_data\test_data\data_6lu2.txt
+set TP_STITCH_NTH=1
+python auto_control_main.py
+```
+
+**方式 3：测试脚本（独立进程验证）**
 
 ```bat
 set TP_STITCH_JSON_PATH=E:\code\track_plot\trace_data\track_stitch\output\stitched_trajectories.json
+set TP_DATA_FILE_PATH=E:\code\track_plot\trace_data\test_data\data_6lu2.txt
 set TP_STITCH_NTH=1
 python -m tp_replay.tests.test_stitch_autopilot
 ```
 
-**方式 3：stitch_autopilot 模式（TM 自动驾驶）**
+### 拼接回放专用环境变量
 
-```bat
-set TP_REPLAY_MODE=stitch_autopilot
-set TP_STITCH_JSON_PATH=E:\code\track_plot\trace_data\track_stitch\output\stitched_trajectories.json
-set TP_STITCH_TM_MAX_ACTIVE=20
-python auto_control_main.py
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `TP_REPLAY_MODE` | `kinematic` | `stitch_kinematic` / `stitch_simple` / `stitch_autopilot` |
+| `TP_STITCH_JSON_PATH` | — | 拼接轨迹 JSON 文件路径 |
+| `TP_STITCH_MIN_QUALITY` | `0.5` | 最低质量评分（quality_score） |
+| `TP_STITCH_MIN_CAMERAS` | `2` | 最少跨摄像头数（camera_count） |
+| `TP_STITCH_MAX_START_S` | `600` | 时间窗口（秒），只取前 N 秒内开始的轨迹 |
+| `TP_STITCH_TM_MAX_ACTIVE` | `30` | 最大同时活跃车辆数 |
+| `TP_SPAWN_MIN_ENTRY_DIST_M` | `5` | spawn 进深（米），从第一个有效路点向前推进 |
+| `TP_STITCH_NTH` | `1` | `stitch_simple` 模式下选取第 N 条高质量轨迹 |
+| `TP_PID_STEER_KP` | `2.0` | 转向 P 增益（越大转向越激进） |
+| `TP_PID_SPEED_KP` | `0.05` | 油门 P 增益 |
+| `TP_PID_SPEED_BRAKE_KP` | `0.1` | 刹车 P 增益 |
+| `TP_PID_WAYPOINT_THRESHOLD_M` | `4.0` | 路点到达判定距离（米） |
+
+### 轨迹对齐方案
+
+拼接数据到 CARLA 世界的坐标变换链：
+
 ```
+拼接数据(cm) ──→ [归一化×缩放] ──→ [旋转对齐] ──→ [平移] ──→ CARLA 世界(m) ──→ [路面吸附]
+```
+
+**Step 1 — 归一化缩放**（cm → m）：
+```
+rx = (x - ds[0]) × DATA_SCALE     # DATA_SCALE=0.01
+ry = (y - ds[1]) × DATA_SCALE × SCALE_Y  # SCALE_Y=1.0
+```
+
+**Step 2 — 旋转 + 平移**：
+```
+rotation_diff = map_angle - data_angle + 180° (REVERSE_DIRECTION) + 0° (ROTATION_BIAS)
+cos_a = cos(rotation_diff), sin_a = sin(rotation_diff)
+off_x = off_y = 0  (LATERAL_OFFSET=0)
+
+world.x = rx×cos_a - ry×sin_a + TUNNEL_ENTRY_X + off_x
+world.y = rx×sin_a + ry×cos_a + TUNNEL_ENTRY_Y + off_y
+world.z = TUNNEL_ENTRY_Z  → 路面吸附后修正
+```
+
+**Step 3 — 路面吸附**：
+```
+wp = map.get_waypoint(loc, project_to_road=True, lane_type=Driving)
+if wp: loc.z = wp.transform.location.z  # 吸附到道路表面
+```
+
+**已知限制**：拼接数据中 `x` 坐标通常为 0（像素坐标缺失），回退到 `ds[0]`，导致所有节点的 X 偏移归零。隧道入口处节点只有 Y 方向微小位移，经旋转后仍在入口边缘——这是入口附近路点投影失败和车辆 spawn 位置偏差的根本原因。后续需引入适配拼接数据的独立锚点。
 
 ### 核心模块
 
 | 文件 | 功能 |
 |------|------|
-| `stitch_adapter.py` | JSON→VehicleTrack，含全帧模式和速度曲线模式 |
-| `stitch_autopilot.py` | TM 自动驾驶编排器（spawn/speed/destroy） |
-| `tests/test_stitch_autopilot.py` | 单条轨迹测试脚本 |
+| `main.py` | `_run_stitch_kinematic`（多车 PID 自动驾驶）、`_run_stitch_simple`（单车验证） |
+| `stitch_adapter.py` | JSON→VehicleTrack（`stitch_autopilot` 旧版模式使用） |
+| `stitch_autopilot.py` | TM 自动驾驶编排器（`stitch_autopilot` 旧版模式使用） |
+| `tests/test_stitch_autopilot.py` | 单条轨迹测试脚本（独立进程） |
