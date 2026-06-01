@@ -170,20 +170,14 @@ class Stitcher:
                     if stitched and self._check_y_monotonic(stitched, max_rev=self.config.max_y_reversals):
                         self._compute_quality(stitched, all_pair_matches)
                         all_chains.append(stitched)
-        # 去重：时间戳重叠度 > 0.5 的两条链保留质量分更高的
+        # 快速去重：按首个节点时间戳分桶，同秒内保留质量分最高的
         all_chains.sort(key=lambda s: s.quality_score, reverse=True)
-        keep = []
+        by_start = {}
         for c in all_chains:
-            c_ts = set(n.timestamp for n in c.nodes)
-            dup = False
-            for k in keep:
-                k_ts = set(n.timestamp for n in k.nodes)
-                overlap = len(c_ts & k_ts) / max(len(c_ts), len(k_ts), 1)
-                if overlap > 0.5:
-                    dup = True
-                    break
-            if not dup:
-                keep.append(c)
+            key = c.nodes[0].timestamp if c.nodes else 0
+            if key not in by_start:
+                by_start[key] = c
+        keep = list(by_start.values())
         logger.info("Multi-start assembly: %d chains -> %d after dedup", len(all_chains), len(keep))
         return keep
 
