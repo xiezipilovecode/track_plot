@@ -350,6 +350,17 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 loc = wpts[j][0]
                 d = loc.distance(engine.entry_loc)
                 _info(f"    wpt[{j}]=({loc.x:.0f},{loc.y:.0f},{loc.z:.1f}) dist_entry={d:.0f}m")
+        if len(wpts) < 2: continue
+        # 沿路点链推进至少 MIN_D 米后才 spawn
+        MIN_D = _get_float_from_env("TP_SPAWN_MIN_ENTRY_DIST_M", 30.0)
+        cumul = 0.0; si = 0
+        for i in range(len(wpts) - 1):
+            cumul += wpts[i][0].distance(wpts[i + 1][0])
+            if cumul >= MIN_D: si = i + 1; break
+        if si > 0:
+            if len(states) < 3: _info(f"    跳过前{si}个路点 (累计{cumul:.0f}m)")
+            wpts = wpts[si:]
+        if len(wpts) < 2: continue
         states.append(_VS(t["trajectory_id"], wpts, stime, t.get("vehicle_type", "car")))
 
     states.sort(key=lambda s: s.stime)
