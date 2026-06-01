@@ -98,36 +98,22 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
         rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
         rough_loc = carla.Location(rough_x, rough_y, engine.entry_loc.z)
 
+        try:
+            base_wp = engine.map.get_waypoint(rough_loc, project_to_road=True,
+                                               lane_type=carla.LaneType.Driving)
+        except Exception:
+            base_wp = None
+        if base_wp is None:
+            continue
+
         if n_lane is not None and clusters:
             try:
-                base_wp = engine.map.get_waypoint(rough_loc, project_to_road=True,
-                                                   lane_type=carla.LaneType.Driving)
-                if base_wp:
-                    loc = _nav_lane(base_wp, n_lane).transform.location
-                else:
-                    loc = rough_loc
+                loc = _nav_lane(base_wp, n_lane).transform.location
             except Exception:
-                loc = rough_loc
+                loc = base_wp.transform.location
         else:
-            loc = rough_loc
-            try:
-                wp = engine.map.get_waypoint(loc, project_to_road=True,
-                                              lane_type=carla.LaneType.Driving)
-                if wp: loc = wp.transform.location
-            except Exception: pass
+            loc = base_wp.transform.location
         wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
-    # 找到第一个能投影到 CARLA 道路上的路点作为 spawn 起点
-    first_good = 0
-    for i in range(min(20, len(wpts))):
-        try:
-            wp = engine.map.get_waypoint(wpts[i][0], project_to_road=True,
-                                          lane_type=carla.LaneType.Driving)
-            if wp:
-                wpts[i] = (wp.transform.location, wpts[i][1], wpts[i][2])
-                first_good = i; break
-        except Exception: pass
-    if first_good > 0:
-        wpts = wpts[first_good:]
     segs=[]
     for i in range(len(wpts)-1):
         d=wpts[i][0].distance(wpts[i+1][0])
@@ -306,7 +292,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             else:
                 n_lane = None
 
-            # 原坐标变换 → rough_loc（始终正确的基础位置）
+            # 原坐标变换 → rough_loc
             y_n = n["y"]
             x_n = n.get("x") or ds[0]
             rx = (x_n - ds[0]) * sc
@@ -315,41 +301,25 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
             rough_loc = carla.Location(rough_x, rough_y, engine.entry_loc.z)
 
+            # 投影到道路——失败则跳过该节点
+            try:
+                base_wp = engine.map.get_waypoint(rough_loc, project_to_road=True,
+                                                   lane_type=carla.LaneType.Driving)
+            except Exception:
+                base_wp = None
+            if base_wp is None:
+                continue  # 不在道路上，跳过
+
             if n_lane is not None and clusters:
-                # CARLA waypoint 网络导航到目标车道
                 try:
-                    base_wp = engine.map.get_waypoint(rough_loc, project_to_road=True,
-                                                       lane_type=carla.LaneType.Driving)
-                    if base_wp:
-                        target_wp = _nav_to_lane(base_wp, n_lane)
-                        loc = target_wp.transform.location
-                    else:
-                        loc = rough_loc
+                    target_wp = _nav_to_lane(base_wp, n_lane)
+                    loc = target_wp.transform.location
                 except Exception:
-                    loc = rough_loc
+                    loc = base_wp.transform.location
             else:
-                # 无车道信息：原路点投影
-                loc = rough_loc
-                try:
-                    wp = engine.map.get_waypoint(loc, project_to_road=True,
-                                                  lane_type=carla.LaneType.Driving)
-                    if wp: loc = wp.transform.location
-                except Exception: pass
+                loc = base_wp.transform.location
             wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
 
-        if len(wpts) < 2: continue
-        # 找到第一个能投影到 CARLA 道路上的路点作为 spawn 起点
-        first_good = 0
-        for i in range(min(20, len(wpts))):
-            try:
-                wp = engine.map.get_waypoint(wpts[i][0], project_to_road=True,
-                                              lane_type=carla.LaneType.Driving)
-                if wp:
-                    wpts[i] = (wp.transform.location, wpts[i][1], wpts[i][2])
-                    first_good = i; break
-            except Exception: pass
-        if first_good > 0:
-            wpts = wpts[first_good:]
         if len(wpts) < 2: continue
         states.append(_VS(t["trajectory_id"], wpts, stime, t.get("vehicle_type", "car")))
 
