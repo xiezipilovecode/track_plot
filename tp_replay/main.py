@@ -250,12 +250,12 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
 
     # ── Phase 3: 构建每车路点 ──
     class _VS:
-        __slots__ = ('tid','wpts','actor','wpidx','stime','done','vtype')
+        __slots__ = ('tid','wpts','actor','wpidx','stime','done','vtype','_phys_off')
         def __init__(self, tid, wpts, stime, vtype):
             self.tid = tid; self.wpts = wpts
             self.actor = None; self.wpidx = 1
             self.stime = stime; self.done = False
-            self.vtype = vtype
+            self.vtype = vtype; self._phys_off = True
 
     def _nav_to_lane(base_wp, target_lane_id: str):
         """在 CARLA 道路网络中从 base_wp 导航到目标车道，返回对应 waypoint。"""
@@ -402,7 +402,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             for vs in list(active):
                 if vs.done: continue
                 # 首帧：启用物理（spawn 时先禁用防掉落）
-                if getattr(vs, '_phys_off', True):
+                if vs._phys_off:
                     vs.actor.set_simulate_physics(True)
                     vs._phys_off = False
                 t = vs.actor.get_transform()
