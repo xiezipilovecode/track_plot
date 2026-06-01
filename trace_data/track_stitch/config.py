@@ -68,21 +68,18 @@ class StitchingConfig:
     # ── 同摄像头跨文件合并 ──
     within_cam_max_time_gap_ms: int = 60_000   # 窗口间最大间隙(ms)
     within_cam_max_y_gap_cm: float = 5_000.0   # 最大y差(cm)
-    within_cam_min_overlap_nodes: int = 1      # 最少重叠节点数
+    # ── y 方向容忍度 ──
+    max_y_reversals: int = 3   # 允许的 y 坐标反向次数（0=严格单调）
 
     # ── 盲区插值 ──
     interp_max_gap_ms: int = 30_000   # 最大插值间隙(ms)，超过标记低置信
     interp_points_per_gap: int = 10   # 每间隙插值点数
-    interp_small_gap_ms: int = 5_000  # 小间隙用线性插值
-
     # ── 性能 ──
     max_files_to_scan: int = 0       # 快速扫描模式（0=全部）
-    batch_size: int = 1_000           # 批量处理轨迹数
 
     # ── 输出 ──
     output_json: str = "stitched_trajectories.json"
     output_stats: str = "stitching_stats.json"
-    output_unmatched: str = "unmatched_fragments.json"
 
     @property
     def camera_pairs(self) -> List[tuple]:
