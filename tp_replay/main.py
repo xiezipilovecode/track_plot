@@ -114,6 +114,22 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
         else:
             loc = base_wp.transform.location
         wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
+    if len(wpts) < 2: _info("wpts too short"); return
+    # 确保 spawn 点深入隧道
+    MIN_ENTRY_M = _get_float_from_env("TP_SPAWN_MIN_ENTRY_DIST_M", 20.0)
+    try:
+        first_wp = engine.map.get_waypoint(wpts[0][0], project_to_road=True,
+                                            lane_type=carla.LaneType.Driving)
+        if first_wp:
+            d = first_wp.transform.location.distance(engine.entry_loc)
+            if d < MIN_ENTRY_M:
+                wp = first_wp; rem = MIN_ENTRY_M - d
+                while rem > 0:
+                    s = min(rem, 5.0); nxt = wp.next(s)
+                    if not nxt: break
+                    wp = nxt[0]; rem -= s
+                wpts[0] = (wp.transform.location, wpts[0][1], wpts[0][2])
+    except Exception: pass
     segs=[]
     for i in range(len(wpts)-1):
         d=wpts[i][0].distance(wpts[i+1][0])
@@ -321,6 +337,21 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
 
         if len(wpts) < 2: continue
+        # 确保 spawn 点深入隧道（入口 mesh 不完整，边缘 spawn 会掉落）
+        MIN_ENTRY_M = _get_float_from_env("TP_SPAWN_MIN_ENTRY_DIST_M", 20.0)
+        try:
+            first_wp = engine.map.get_waypoint(wpts[0][0], project_to_road=True,
+                                                lane_type=carla.LaneType.Driving)
+            if first_wp:
+                d = first_wp.transform.location.distance(engine.entry_loc)
+                if d < MIN_ENTRY_M:
+                    wp = first_wp; rem = MIN_ENTRY_M - d
+                    while rem > 0:
+                        s = min(rem, 5.0); nxt = wp.next(s)
+                        if not nxt: break
+                        wp = nxt[0]; rem -= s
+                    wpts[0] = (wp.transform.location, wpts[0][1], wpts[0][2])
+        except Exception: pass
         states.append(_VS(t["trajectory_id"], wpts, stime, t.get("vehicle_type", "car")))
 
     states.sort(key=lambda s: s.stime)
