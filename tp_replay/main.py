@@ -63,14 +63,17 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
                             buf = ""
                     elif ch == '[' and depth == 0: started = True; buf = ""
     trajs = _iter_js_trajs(stitch_json)
-    # 选一条车：高质量 + 单调 y（防 Z 字形轨迹导致运动混乱）
-    def _check_monotonic(tr,max_rev=3):
-        nds=tr.get("nodes",[])
-        return sum(1 for i in range(len(nds)-1) if nds[i+1]["y"]<nds[i]["y"])<=max_rev
-    nth=_get_int_from_env("TP_STITCH_NTH",1)
-    cand=sorted([t for t in trajs if t["quality_score"]>0.7 and t["camera_count"]>=5 and _check_monotonic(t)],
-                key=lambda x:x["quality_score"],reverse=True)
-    st=cand[min(nth-1,len(cand)-1)] if cand else None
+    nth = _get_int_from_env("TP_STITCH_NTH", 1)
+    # 流式挑选：边读边筛，找到第 N 条高质量轨迹即停
+    def _check_monotonic(tr, max_rev=3):
+        nds = tr.get("nodes", [])
+        return sum(1 for i in range(len(nds) - 1) if nds[i + 1]["y"] < nds[i]["y"]) <= max_rev
+    cand = []
+    for t in trajs:
+        if t.get("quality_score", 0) > 0.7 and t.get("camera_count", 0) >= 5 and _check_monotonic(t):
+            cand.append(t)
+            if len(cand) >= nth: break
+    st = cand[-1] if len(cand) >= nth else None
     if not st: return
     nodes=st["nodes"]
     from .lane_align import cluster_x_to_lanes, assign_lane
@@ -257,23 +260,24 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
     all_trajs = _iter_trajs(stitch_json)
     min_q = _get_float_from_env("TP_STITCH_MIN_QUALITY", float(config.STITCH_MIN_QUALITY))
     min_c = _get_int_from_env("TP_STITCH_MIN_CAMERAS", int(config.STITCH_MIN_CAMERAS))
-    max_n = _get_int_from_env("TP_TRACK_LIMIT", 200) or None
+    max_n = _get_int_from_env("TP_TRACK_LIMIT", 200) or 999999
+    time_win = _get_float_from_env("TP_STITCH_MAX_START_S", 600.0)
 
+    # 流式加载 + 内联过滤：够数即停，不读完整 2GB 文件
     filtered = []
-    for t in all_trajs:
+    global_min_ts = None
+    for t in _iter_trajs(stitch_json):
         if t.get("quality_score", 0) < min_q: continue
         if t.get("camera_count", 0) < min_c: continue
+        ts = t["nodes"][0]["timestamp"] / 1000.0
+        if global_min_ts is None:
+            global_min_ts = ts
+        if ts - global_min_ts > time_win: continue
         filtered.append(t)
-        if max_n and len(filtered) >= max_n: break
+        if len(filtered) >= max_n: break
 
-    if not filtered:
-        _info("错误：无符合条件的拼接轨迹"); return
     filtered.sort(key=lambda t: t["nodes"][0]["timestamp"])
-    global_min_ts = filtered[0]["nodes"][0]["timestamp"] / 1000.0
-    time_win = _get_float_from_env("TP_STITCH_MAX_START_S", 600.0)
-    filtered = [t for t in filtered
-                if t["nodes"][0]["timestamp"] / 1000.0 - global_min_ts < time_win]
-    _info(f"加载 {len(filtered)} 条轨迹 (Q>={min_q} cam>={min_c} window<={time_win}s)")
+    _info(f"加载 {len(filtered)} 条轨迹 (Q>={min_q} cam>={min_c} window<={time_win}s limit={max_n})")
 
     from .lane_align import cluster_x_to_lanes, assign_lane
 
