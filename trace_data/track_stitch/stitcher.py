@@ -39,7 +39,6 @@ class Stitcher:
             "tracks_after_merge": 0,
             "matched_pairs": 0,
             "stitched_trajectories": 0,
-            "unmatched_fragments": 0,
             "interpolated_nodes": 0,
             "elapsed_seconds": 0.0,
         }
@@ -128,7 +127,7 @@ class Stitcher:
         # 排序 + 质量评分
         for st in stitched:
             st.sort_nodes()
-            st.quality_score = self._compute_quality(st)
+            self._compute_quality(st, all_pair_matches)
 
         self.stats["elapsed_seconds"] = time.perf_counter() - t0
         logger.info("=" * 50)
@@ -147,53 +146,46 @@ class Stitcher:
         datasets: Dict[str, CameraDataset],
         all_pair_matches: List[List[Tuple[Trajectory, Trajectory, float]]],
     ) -> List[StitchedTrajectory]:
-        """将匹配对链式组装为完整轨迹。
-
-        通过 BFS/贪心连接，从 TV023 开始向后追溯。
-        """
+        """多起点轨迹组装：从每个摄像头出发独立组装，去重后返回。"""
         # 构建匹配图
-        # match_graph[traj_a] = [(traj_b, cost, pair_idx)]
         match_graph: dict = defaultdict(list)
-        all_trajs_b_used: set = set()
-
         for pair_idx, matches in enumerate(all_pair_matches):
             for traj_a, traj_b, cost in matches:
                 match_graph[id(traj_a)].append((traj_b, cost, pair_idx))
-                all_trajs_b_used.add(id(traj_b))
 
-        stitched_list: List[StitchedTrajectory] = []
-        traj_id = 0
-
-        # 找到所有起点的轨迹（TV023 中没有被作为 "b" 使用的）
-        first_ds = datasets.get(self.config.cameras[0])
-        if first_ds is None:
-            return stitched_list
-
-        for traj in first_ds.get_active_trajs(
-            min_nodes=self.config.min_nodes_per_track,
-            skip_static=self.config.skip_static_tracks,
-        ):
-            chain = self._build_chain(
-                traj, match_graph, datasets,
-            )
-            if chain:
-                stitched = self._chain_to_stitched(
-                    chain, traj_id,
-                )
-                if self._check_y_monotonic(stitched, max_rev=0):
-                    stitched_list.append(stitched)
-                    traj_id += 1
-
-        logger.info(
-            "Chained %d trajectories from %d starting fragments",
-            len(stitched_list),
-            len(first_ds.get_active_trajs(
+        all_chains = []
+        for cam_id in self.config.cameras:
+            ds = datasets.get(cam_id)
+            if ds is None:
+                continue
+            for traj in ds.get_active_trajs(
                 min_nodes=self.config.min_nodes_per_track,
                 skip_static=self.config.skip_static_tracks,
-            )),
-        )
-
-        return stitched_list
+            ):
+                if id(traj) not in match_graph:
+                    continue
+                chain = self._build_chain(traj, match_graph, all_pair_matches)
+                if chain and len(chain) >= 2:
+                    stitched = self._chain_to_stitched(chain, all_pair_matches)
+                    if stitched and self._check_y_monotonic(stitched, max_rev=self.config.max_y_reversals):
+                        self._compute_quality(stitched, all_pair_matches)
+                        all_chains.append(stitched)
+        # 去重：时间戳重叠度 > 0.5 的两条链保留质量分更高的
+        all_chains.sort(key=lambda s: s.quality_score, reverse=True)
+        keep = []
+        for c in all_chains:
+            c_ts = set(n.timestamp for n in c.nodes)
+            dup = False
+            for k in keep:
+                k_ts = set(n.timestamp for n in k.nodes)
+                overlap = len(c_ts & k_ts) / max(len(c_ts), len(k_ts), 1)
+                if overlap > 0.5:
+                    dup = True
+                    break
+            if not dup:
+                keep.append(c)
+        logger.info("Multi-start assembly: %d chains -> %d after dedup", len(all_chains), len(keep))
+        return keep
 
     def _check_y_monotonic(self, stitched: StitchedTrajectory, max_rev: int = 5) -> bool:
         """检查轨迹 y 坐标是否单调递增。"""
@@ -230,11 +222,14 @@ class Stitcher:
     def _chain_to_stitched(
         self,
         chain: List[Tuple[Trajectory, float, int]],
-        traj_id: int,
+        all_matches=None,
     ) -> StitchedTrajectory:
         """将匹配链转为 StitchedTrajectory。"""
+        if not hasattr(self, "_traj_id_counter"):
+            self._traj_id_counter = 0
+        self._traj_id_counter += 1
         stitched = StitchedTrajectory(
-            trajectory_id=f"TRAJ_{traj_id:06d}",
+            trajectory_id=f"TRAJ_{self._traj_id_counter:06d}",
         )
 
         for i, (traj, cost, pair_idx) in enumerate(chain):
@@ -320,29 +315,28 @@ class Stitcher:
                 interp_count += 1
 
         stitched.nodes = new_nodes
+        if stitched.nodes:
+            if not self._check_y_monotonic(stitched, max_rev=self.config.max_y_reversals):
+                logger.warning("Trajectory %s non-monotonic after interpolation, discarding", stitched.trajectory_id)
+                return 0
         return interp_count
 
     # ── 质量评分 ────────────────────────────────────────────
 
-    def _compute_quality(self, stitched: StitchedTrajectory) -> float:
-        """计算拼接轨迹质量评分（0-1）。"""
-        if not stitched.nodes:
-            return 0.0
-
-        # 完整性评分（摄像头覆盖数 / 6）
-        completeness = min(1.0, stitched.camera_count / 6.0)
-
-        # 连续性评分（1 - 插值比）
-        continuity = 1.0 - stitched.interp_ratio
-
-        # 匹配置信度（1 / (1 + avg_match_cost)）
-        if stitched.matched_pairs:
-            avg_cost = sum(c for _, _, c in stitched.matched_pairs) / len(stitched.matched_pairs)
-            match_conf = 1.0 / (1.0 + avg_cost / 1000.0)
-        else:
-            match_conf = 0.5
-
-        return 0.3 * completeness + 0.3 * continuity + 0.2 * match_conf + 0.2 * min(1.0, stitched.camera_count / 3.0)
+    def _compute_quality(self, stitched: StitchedTrajectory, all_matches=None) -> float:
+        cam_n = len(self.config.cameras)
+        if cam_n == 0:
+            stitched.quality_score = 0.0
+            return stitched.quality_score
+        camera_count = stitched.camera_count
+        coverage = min(1.0, camera_count / cam_n)
+        interp_ratio = stitched.interp_ratio
+        continuity = 1.0 - interp_ratio
+        costs = [cost for _, _, cost in stitched.matched_pairs if cost < 1e8]
+        avg_cost = sum(costs) / max(len(costs), 1)
+        match_conf = 1.0 / (1.0 + avg_cost / 1000.0)
+        stitched.quality_score = 0.5 * coverage + 0.3 * continuity + 0.2 * match_conf
+        return stitched.quality_score
 
     # ── 导出 ────────────────────────────────────────────────
 
