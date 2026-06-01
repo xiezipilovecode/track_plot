@@ -246,6 +246,13 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
 
     clusters = cluster_x_to_lanes(filtered)
     if clusters:
+        lane_cnt = {"-1": 0, "-2": 0, "-3": 0}
+        for t in filtered:
+            n0 = t["nodes"][0]
+            lid = assign_lane(n0.get("x"), n0.get("camera_id", ""), clusters)
+            lane_cnt[lid] = lane_cnt.get(lid, 0) + 1
+        _info(f"x→车道分布: 左-1:{lane_cnt['-1']} 中-2:{lane_cnt['-2']} 右-3:{lane_cnt['-3']} (共{len(filtered)}条)")
+    if clusters:
         _info(f"x→车道聚类完成: {len(clusters)} 个摄像头")
 
     # ── Phase 3: 构建每车路点 ──
@@ -335,7 +342,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             continue
         # 诊断前3条轨迹
         if len(states) < 3:
-            _info(f"  {t['trajectory_id']}: {len(nodes)}节点 → {len(wpts)}wpt (过滤{len(nodes)-len(wpts)}个)")
+            _info(f"  {t['trajectory_id']}: {len(nodes)}节点→{len(wpts)}wpt 车道={clusters and assign_lane(nodes[0].get('x'),nodes[0].get('camera_id',''),clusters) or '?'}")
             _info(f"    entry_loc=({engine.entry_loc.x:.0f},{engine.entry_loc.y:.0f},{engine.entry_loc.z:.1f}) map_angle={engine.map_angle:.1f}")
             _info(f"    ds=({ds[0]:.1f},{ds[1]:.1f}) ca={ca:.4f} sa={sa:.4f}")
             # 显示前3个原始节点和变换后的rough_loc
@@ -406,6 +413,8 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 # 先禁用物理，精确放置到 spawn 位置，避免首帧下落
                 actor.set_simulate_physics(False)
                 actor.set_transform(carla.Transform(carla.Location(p0.x, p0.y, p0.z + 0.5), carla.Rotation(yaw=yaw0)))
+                try: actor.set_collision_enabled(False)  # 禁用车辆间碰撞
+                except Exception: pass
                 vs.actor = actor
                 active.append(vs); spawned += 1
 
