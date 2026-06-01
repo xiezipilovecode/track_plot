@@ -392,13 +392,19 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                         carla.Transform(carla.Location(p0.x, p0.y + off, p0.z), carla.Rotation(yaw=yaw0)))
                 if actor is None:
                     spawn_fail += 1; vs.done = True; continue
-                # physics ON — 车辆自行驾驶
+                # 先禁用物理，精确放置到 spawn 位置，避免首帧下落
+                actor.set_simulate_physics(False)
+                actor.set_transform(carla.Transform(carla.Location(p0.x, p0.y, p0.z + 0.5), carla.Rotation(yaw=yaw0)))
                 vs.actor = actor
                 active.append(vs); spawned += 1
 
             # ── 推进所有活跃车辆 ──
             for vs in list(active):
                 if vs.done: continue
+                # 首帧：启用物理（spawn 时先禁用防掉落）
+                if getattr(vs, '_phys_off', True):
+                    vs.actor.set_simulate_physics(True)
+                    vs._phys_off = False
                 t = vs.actor.get_transform()
                 vel = vs.actor.get_velocity()
                 speed_ms = math.sqrt(vel.x ** 2 + vel.y ** 2)
