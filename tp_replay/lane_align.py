@@ -38,3 +38,36 @@ def load_lane_paths(xodr_path: str, step_m: float = 2.0) -> dict:
         pts.sort(key=lambda p: p[1])
         result[lane_id] = pts
     return result
+
+
+def cluster_x_to_lanes(trajs: List[dict]) -> Dict[str, Tuple[float, float]]:
+    """对每个摄像头的实测节点 x 值做三分位聚类。
+
+    Args:
+        trajs: 拼接轨迹列表，每个含 "nodes" 列表
+
+    Returns:
+        {camera_id: (tercile1, tercile2)}
+        x < tercile1 → 车道 -1 (左)
+        tercile1 ≤ x < tercile2 → 车道 -2 (中)
+        x ≥ tercile2 → 车道 -3 (右)
+    """
+    from collections import defaultdict
+
+    cam_xs = defaultdict(list)
+    for t in trajs:
+        for n in t.get("nodes", []):
+            x = n.get("x")
+            cam = n.get("camera_id", "")
+            if x is not None and cam and cam != "INTERP":
+                cam_xs[cam].append(float(x))
+
+    clusters = {}
+    for cam, xs in cam_xs.items():
+        xs.sort()
+        n = len(xs)
+        t1 = xs[n // 3]
+        t2 = xs[2 * n // 3]
+        clusters[cam] = (t1, t2)
+
+    return clusters
