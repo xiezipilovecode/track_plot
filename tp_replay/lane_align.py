@@ -58,7 +58,7 @@ def cluster_x_to_lanes(trajs: List[dict]) -> Dict[str, Tuple[float, float]]:
     for t in trajs:
         for n in t.get("nodes", []):
             x = n.get("x")
-            cam = n.get("camera_id", "")
+            cam = n.get("camera", "")
             if x is not None and cam and cam != "INTERP":
                 cam_xs[cam].append(float(x))
 
