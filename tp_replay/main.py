@@ -45,6 +45,13 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
     if anchor_file and os.path.exists(anchor_file):
         engine.process_data(anchor_file)
         engine.pending_tracks = []
+    # ── 车道路径初始化 ──
+    from .lane_align import load_lane_paths, cluster_x_to_lanes, assign_lane, find_closest_lane_point
+    try:
+        lane_paths = load_lane_paths(config.XODR_PATH)
+    except Exception as e:
+        _info(f"警告：车道路径加载失败 ({e})，回退原方案")
+        lane_paths = None
     with open(stitch_json,"r",encoding="utf-8") as f: data=json.load(f)
     trajs=data.get("trajectories",data if isinstance(data,list) else [])
     # 选一条车：高质量 + 单调 y（防 Z 字形轨迹导致运动混乱）
@@ -57,22 +64,51 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
     st=cand[min(nth-1,len(cand)-1)] if cand else None
     if not st: return
     nodes=st["nodes"]
+    clusters = cluster_x_to_lanes([st]) if lane_paths else {}
     # 坐标变换参数防护
     if not hasattr(engine,'_stitch_cos_a') or engine._stitch_cos_a is None:
         _info("错误: engine 未初始化坐标变换参数，请设置 TP_DATA_FILE_PATH 指向锚点文件"); return
     ca=engine._stitch_cos_a; sa=engine._stitch_sin_a; ox=engine._stitch_off_x; oy=engine._stitch_off_y; ds=engine._data_start_point
     sc=float(config.DATA_SCALE); sy=float(config.SCALE_Y)
-    # ── 以下与测试脚本完全一致 ──
-    wpts=[]
+    # ── 路点构建（车道对齐优先，回退原始坐标变换） ──
+    wpts = []
+    last_lane = "-2"
     for n in nodes:
-        y=n["y"]; x=n.get("x") or ds[0]
-        rx=(x-ds[0])*sc; ry=(y-ds[1])*sc*sy
-        loc=carla.Location(rx*ca-ry*sa+engine.entry_loc.x+ox, rx*sa+ry*ca+engine.entry_loc.y+oy, engine.entry_loc.z)
-        try:
-            wp=engine.map.get_waypoint(loc,project_to_road=True,lane_type=carla.LaneType.Driving)
-            if wp: loc=wp.transform.location
-        except Exception:
-            pass  # 保持 engine.entry_loc.z；回放时 z 有偏差但不会崩溃
+        cam_id = n.get("camera_id", "")
+        if cam_id == "INTERP":
+            n_lane = last_lane
+        elif lane_paths and clusters:
+            x_val = n.get("x")
+            n_lane = assign_lane(x_val, cam_id, clusters) if x_val is not None else last_lane
+            last_lane = n_lane
+        else:
+            n_lane = None
+
+        if n_lane is not None and lane_paths:
+            lp = lane_paths.get(n_lane, [])
+            if lp:
+                rx = (float(n.get("x") or ds[0]) - ds[0]) * sc
+                ry = (float(n.get("y", 0)) - ds[1]) * sc * sy
+                rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
+                px, py, pz, _ = find_closest_lane_point(rough_y, lp)
+                loc = carla.Location(px, py, pz)
+            else:
+                loc = carla.Location(engine.entry_loc.x, engine.entry_loc.y, engine.entry_loc.z)
+        else:
+            y_n = n["y"]
+            x_n = n.get("x") or ds[0]
+            rx = (x_n - ds[0]) * sc
+            ry = (y_n - ds[1]) * sc * sy
+            loc = carla.Location(
+                rx * ca - ry * sa + engine.entry_loc.x + ox,
+                rx * sa + ry * ca + engine.entry_loc.y + oy,
+                engine.entry_loc.z,
+            )
+            try:
+                wp = engine.map.get_waypoint(loc, project_to_road=True,
+                                              lane_type=carla.LaneType.Driving)
+                if wp: loc = wp.transform.location
+            except Exception: pass
         wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
     segs=[]
     for i in range(len(wpts)-1):
