@@ -45,8 +45,24 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
     if anchor_file and os.path.exists(anchor_file):
         engine.process_data(anchor_file)
         engine.pending_tracks = []
-    with open(stitch_json,"r",encoding="utf-8") as f: data=json.load(f)
-    trajs=data.get("trajectories",data if isinstance(data,list) else [])
+    # 流式读取 trajectory，选取一条高质量轨迹
+    def _iter_js_trajs(path):
+        with open(path, "r", encoding="utf-8") as fh:
+            buf = ""; depth = 0; started = False
+            for line in fh:
+                for ch in line:
+                    buf += ch
+                    if ch == '{':
+                        if depth == 0 and started: buf = '{'
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0 and started:
+                            try: yield json.loads(buf)
+                            except Exception: pass
+                            buf = ""
+                    elif ch == '[' and depth == 0: started = True; buf = ""
+    trajs = _iter_js_trajs(stitch_json)
     # 选一条车：高质量 + 单调 y（防 Z 字形轨迹导致运动混乱）
     def _check_monotonic(tr,max_rev=3):
         nds=tr.get("nodes",[])
@@ -218,13 +234,30 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
     ds = engine._data_start_point
     sc = float(config.DATA_SCALE); sy = float(config.SCALE_Y)
 
-    # ── Phase 2: 加载 & 过滤 ──
-    with open(stitch_json, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-    all_trajs = raw.get("trajectories", raw if isinstance(raw, list) else [])
+    # ── Phase 2: 加载 & 过滤（流式解析，避免 2GB JSON 全部加载到内存）──
+    def _iter_trajs(path):
+        """逐条流式读取拼接 JSON 中的 trajectories 数组。"""
+        with open(path, "r", encoding="utf-8") as fh:
+            buf = ""; depth = 0; started = False
+            for line in fh:
+                for ch in line:
+                    buf += ch
+                    if ch == '{':
+                        if depth == 0 and started:
+                            buf = '{'  # 开始新对象
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0 and started:
+                            try: yield json.loads(buf)
+                            except Exception: pass
+                            buf = ""
+                    elif ch == '[' and depth == 0:
+                        started = True; buf = ""
+    all_trajs = _iter_trajs(stitch_json)
     min_q = _get_float_from_env("TP_STITCH_MIN_QUALITY", float(config.STITCH_MIN_QUALITY))
     min_c = _get_int_from_env("TP_STITCH_MIN_CAMERAS", int(config.STITCH_MIN_CAMERAS))
-    max_n = _get_int_from_env("TP_TRACK_LIMIT", 0) or None
+    max_n = _get_int_from_env("TP_TRACK_LIMIT", 200) or None
 
     filtered = []
     for t in all_trajs:
