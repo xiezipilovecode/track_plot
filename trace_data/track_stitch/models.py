@@ -144,13 +144,15 @@ class Trajectory:
                 self._is_static = True
                 return self._is_static
 
-            y_vals = [n.y for n in vn]
-            y_std = float(np.std(y_vals))
+            y_vals = np.array([n.y for n in vn if n.y is not None])
+            if len(y_vals) < 2:
+                return True
+            std_y = float(np.std(y_vals, ddof=1))
 
             speeds = [n.speed for n in vn if n.speed is not None]
             avg_speed = float(np.mean(speeds)) if speeds else 0.0
 
-            self._is_static = (y_std < 100.0) and (avg_speed < 5.0)
+            self._is_static = (std_y < 100.0) and (avg_speed < 5.0)
         return self._is_static
 
     @property
@@ -194,17 +196,21 @@ class CameraDataset:
 
     @property
     def y_min(self) -> float:
-        return min(
-            (t.valid_nodes[0].y for t in self.trajectories if t.valid_nodes),
-            default=float("inf"),
-        )
+        vals = []
+        for t in self.trajectories:
+            for n in t.valid_nodes:
+                if n.y is not None:
+                    vals.append(n.y)
+        return min(vals) if vals else 0.0
 
     @property
     def y_max(self) -> float:
-        return max(
-            (t.valid_nodes[-1].y for t in self.trajectories if t.valid_nodes),
-            default=float("-inf"),
-        )
+        vals = []
+        for t in self.trajectories:
+            for n in t.valid_nodes:
+                if n.y is not None:
+                    vals.append(n.y)
+        return max(vals) if vals else 0.0
 
     def get_active_trajs(self, min_nodes: int = 2, skip_static: bool = True) -> List[Trajectory]:
         """获取可用于匹配的活跃轨迹。"""
