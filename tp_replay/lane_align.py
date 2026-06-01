@@ -71,3 +71,43 @@ def cluster_x_to_lanes(trajs: List[dict]) -> Dict[str, Tuple[float, float]]:
         clusters[cam] = (t1, t2)
 
     return clusters
+
+
+def assign_lane(x: Optional[float], camera_id: str,
+                clusters: Dict[str, Tuple[float, float]]) -> str:
+    """根据 x 像素值 + camera_id 确定车道号。
+
+    Returns: "-1", "-2", or "-3"
+    """
+    if x is None or camera_id not in clusters:
+        return "-2"
+    t1, t2 = clusters[camera_id]
+    if x < t1:
+        return "-1"
+    elif x < t2:
+        return "-2"
+    else:
+        return "-3"
+
+
+def find_closest_lane_point(world_y: float, lane_path: List[Tuple[float, float, float, float]]) -> Tuple[float, float, float, float]:
+    """在车道路径中二分查找最接近 world_y 的路点。
+
+    Args:
+        world_y: CARLA 世界 Y 坐标
+        lane_path: [(x, y, z, yaw), ...]，已按 y 升序
+
+    Returns:
+        (x, y, z, yaw) — 最近路点
+    """
+    ys = [p[1] for p in lane_path]
+    idx = bisect.bisect_left(ys, world_y)
+    if idx == 0:
+        return lane_path[0]
+    if idx >= len(lane_path):
+        return lane_path[-1]
+    prev_pt = lane_path[idx - 1]
+    next_pt = lane_path[idx]
+    if abs(prev_pt[1] - world_y) <= abs(next_pt[1] - world_y):
+        return prev_pt
+    return next_pt
