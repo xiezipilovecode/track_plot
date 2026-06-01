@@ -115,6 +115,10 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
             loc = base_wp.transform.location
         wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
     if len(wpts) < 2: _info("wpts too short"); return
+    _info(f"  {st['trajectory_id']}: {len(nodes)}节点→{len(wpts)}wpt entry_loc=({engine.entry_loc.x:.0f},{engine.entry_loc.y:.0f},{engine.entry_loc.z:.1f})")
+    for j in range(min(3, len(wpts))):
+        loc = wpts[j][0]; d = loc.distance(engine.entry_loc)
+        _info(f"    wpt[{j}]=({loc.x:.0f},{loc.y:.0f},{loc.z:.1f}) dist_entry={d:.0f}m")
     # 确保 spawn 点深入隧道
     MIN_ENTRY_M = _get_float_from_env("TP_SPAWN_MIN_ENTRY_DIST_M", 20.0)
     try:
@@ -128,6 +132,7 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
                     s = min(rem, 5.0); nxt = wp.next(s)
                     if not nxt: break
                     wp = nxt[0]; rem -= s
+                _info(f"    推进: dist={d:.0f}m→{wp.transform.location.distance(engine.entry_loc):.0f}m")
                 wpts[0] = (wp.transform.location, wpts[0][1], wpts[0][2])
     except Exception: pass
     segs=[]
@@ -336,8 +341,28 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 loc = base_wp.transform.location
             wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
 
-        if len(wpts) < 2: continue
-        # 确保 spawn 点深入隧道（入口 mesh 不完整，边缘 spawn 会掉落）
+        if len(wpts) < 2:
+            if len(states) < 3:
+                _info(f"  丢弃 {t['trajectory_id']}: {len(nodes)}节点 → {len(wpts)}wpt (不足2个)")
+            continue
+        # 诊断前3条轨迹
+        if len(states) < 3:
+            _info(f"  {t['trajectory_id']}: {len(nodes)}节点 → {len(wpts)}wpt (过滤{len(nodes)-len(wpts)}个)")
+            _info(f"    entry_loc=({engine.entry_loc.x:.0f},{engine.entry_loc.y:.0f},{engine.entry_loc.z:.1f}) map_angle={engine.map_angle:.1f}")
+            _info(f"    ds=({ds[0]:.1f},{ds[1]:.1f}) ca={ca:.4f} sa={sa:.4f}")
+            # 显示前3个原始节点和变换后的rough_loc
+            for j in range(min(3, len(nodes))):
+                nn = nodes[j]
+                y_n = nn["y"]; x_n = nn.get("x") or ds[0]
+                rx = (x_n - ds[0]) * sc; ry = (y_n - ds[1]) * sc * sy
+                rx_loc = rx * ca - ry * sa + engine.entry_loc.x + ox
+                ry_loc = rx * sa + ry * ca + engine.entry_loc.y + oy
+                _info(f"    node[{j}]: raw({x_n:.0f},{y_n:.0f}) → ({rx:.2f},{ry:.2f})m → CARLA({rx_loc:.0f},{ry_loc:.0f})")
+            for j in range(min(3, len(wpts))):
+                loc = wpts[j][0]
+                d = loc.distance(engine.entry_loc)
+                _info(f"    wpt[{j}]=({loc.x:.0f},{loc.y:.0f},{loc.z:.1f}) dist_entry={d:.0f}m")
+        # 确保 spawn 点深入隧道
         MIN_ENTRY_M = _get_float_from_env("TP_SPAWN_MIN_ENTRY_DIST_M", 20.0)
         try:
             first_wp = engine.map.get_waypoint(wpts[0][0], project_to_road=True,
@@ -351,6 +376,8 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                         if not nxt: break
                         wp = nxt[0]; rem -= s
                     wpts[0] = (wp.transform.location, wpts[0][1], wpts[0][2])
+                    if len(states) < 3:
+                        _info(f"    推进: dist={d:.0f}m→{wp.transform.location.distance(engine.entry_loc):.0f}m")
         except Exception: pass
         states.append(_VS(t["trajectory_id"], wpts, stime, t.get("vehicle_type", "car")))
 
