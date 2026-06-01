@@ -157,6 +157,16 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             bp = w.get_blueprint_library().filter("vehicle.*")[0]
         return bp
 
+    # ── 车道路径初始化 ──
+    from .lane_align import load_lane_paths, cluster_x_to_lanes, assign_lane, find_closest_lane_point
+
+    try:
+        lane_paths = load_lane_paths(config.XODR_PATH)
+        _info(f"车道路径加载成功: -1: {len(lane_paths.get('-1',[]))}, -2: {len(lane_paths.get('-2',[]))}, -3: {len(lane_paths.get('-3',[]))} 点/车道")
+    except Exception as e:
+        _info(f"警告：车道路径加载失败 ({e})，回退原方案")
+        lane_paths = None
+
     stitch_json = os.getenv("TP_STITCH_JSON_PATH") or config.STITCH_JSON_PATH
     if not stitch_json:
         _info("错误：stitch_kinematic 模式需要设置 TP_STITCH_JSON_PATH")
@@ -199,6 +209,10 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 if t["nodes"][0]["timestamp"] / 1000.0 - global_min_ts < time_win]
     _info(f"加载 {len(filtered)} 条轨迹 (Q>={min_q} cam>={min_c} window<={time_win}s)")
 
+    clusters = cluster_x_to_lanes(filtered) if lane_paths else {}
+    if clusters:
+        _info(f"x→车道聚类完成: {len(clusters)} 个摄像头")
+
     # ── Phase 3: 构建每车路点 ──
     class _VS:
         __slots__ = ('tid','wpts','actor','wpidx','stime','done','vtype')
@@ -209,50 +223,54 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             self.vtype = vtype
 
     states = []
-    skipped_invalid = 0; skipped_total = 0
-    MAX_SKIP_WP = 10  # 最多跳过前 N 个无效路点
     for t in filtered:
         nodes = t["nodes"]
         stime = nodes[0]["timestamp"] / 1000.0 - global_min_ts
-        # 构建路点（带投影状态标记）
-        wpts_raw = []
+
+        wpts = []
+        last_lane = "-2"
         for n in nodes:
-            y = n["y"]; x = n.get("x") or ds[0]
-            rx = (x - ds[0]) * sc; ry = (y - ds[1]) * sc * sy
-            loc = carla.Location(rx * ca - ry * sa + engine.entry_loc.x + ox,
-                                  rx * sa + ry * ca + engine.entry_loc.y + oy,
-                                  engine.entry_loc.z)
-            snapped = False
-            try:
-                wp = engine.map.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
-                if wp:
-                    loc = wp.transform.location
-                    snapped = True
-            except Exception: pass
-            wpts_raw.append((loc, n.get("speed") or 0, n["timestamp"], snapped))
-        # 找第一个有效路点（成功投影到道路的）
-        first_valid = None
-        for i in range(min(MAX_SKIP_WP, len(wpts_raw))):
-            if wpts_raw[i][3]:
-                first_valid = i; break
-        if first_valid is None:
-            skipped_invalid += 1; continue
-        # 从第一个有效路点起，沿路点链前进至少 MIN_SPAWN_DIST_M 米进入隧道
-        MIN_SPAWN_DIST_M = _get_float_from_env("TP_SPAWN_MIN_ENTRY_DIST_M", 5.0)
-        cumul = 0.0; start_idx = first_valid
-        for i in range(first_valid, len(wpts_raw) - 1):
-            if cumul >= MIN_SPAWN_DIST_M:
-                start_idx = i; break
-            cumul += wpts_raw[i][0].distance(wpts_raw[i + 1][0])
-        if start_idx > first_valid and len(states) < 3:
-            _info(f"  WP skip: {t['trajectory_id']} first_valid={first_valid} → start_idx={start_idx} ({cumul:.0f}m)")
-        skipped_total += start_idx
-        wpts = [(loc, spd, ts) for loc, spd, ts, _ in wpts_raw[start_idx:]]
+            cam_id = n.get("camera_id", "")
+            if cam_id == "INTERP":
+                n_lane = last_lane
+            elif lane_paths and clusters:
+                x_val = n.get("x")
+                n_lane = assign_lane(x_val, cam_id, clusters) if x_val is not None else last_lane
+                last_lane = n_lane
+            else:
+                n_lane = None
+
+            if n_lane is not None and lane_paths:
+                lp = lane_paths.get(n_lane, [])
+                if lp:
+                    rx = (float(n.get("x") or ds[0]) - ds[0]) * sc
+                    ry = (float(n.get("y", 0)) - ds[1]) * sc * sy
+                    rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
+                    px, py, pz, _ = find_closest_lane_point(rough_y, lp)
+                    loc = carla.Location(px, py, pz)
+                else:
+                    loc = carla.Location(engine.entry_loc.x, engine.entry_loc.y, engine.entry_loc.z)
+            else:
+                # 回退：原坐标变换
+                y_n = n["y"]
+                x_n = n.get("x") or ds[0]
+                rx = (x_n - ds[0]) * sc
+                ry = (y_n - ds[1]) * sc * sy
+                loc = carla.Location(
+                    rx * ca - ry * sa + engine.entry_loc.x + ox,
+                    rx * sa + ry * ca + engine.entry_loc.y + oy,
+                    engine.entry_loc.z,
+                )
+                try:
+                    wp = engine.map.get_waypoint(loc, project_to_road=True,
+                                                  lane_type=carla.LaneType.Driving)
+                    if wp: loc = wp.transform.location
+                except Exception: pass
+            wpts.append((loc, n.get("speed") or 0, n["timestamp"]))
+
         if len(wpts) < 2: continue
         states.append(_VS(t["trajectory_id"], wpts, stime, t.get("vehicle_type", "car")))
 
-    if skipped_invalid:
-        _info(f"跳过 {skipped_invalid} 条全无效路点轨迹 (共跳过 {skipped_total} 个无效起始路点)")
     states.sort(key=lambda s: s.stime)
     max_active = _get_int_from_env("TP_STITCH_TM_MAX_ACTIVE", int(config.STITCH_TM_MAX_ACTIVE))
     _info(f"准备回放: {len(states)} 条轨迹 max_active={max_active}")
