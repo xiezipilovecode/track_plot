@@ -435,7 +435,13 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                         continue
 
                 target = vs.wpts[vs.wpidx][0]
-                target_spd = max(5.0, vs.wpts[vs.wpidx][1]) / 3.6  # km/h → m/s
+                # 速度线性插值：当前路点速度 → 下个路点速度，按距离进度混合
+                spd_cur = max(5.0, vs.wpts[vs.wpidx][1]) / 3.6
+                spd_nxt = max(5.0, vs.wpts[min(vs.wpidx + 1, len(vs.wpts) - 1)][1]) / 3.6
+                dist_cur = t.location.distance(vs.wpts[vs.wpidx][0])
+                dist_seg = vs.wpts[vs.wpidx][0].distance(vs.wpts[min(vs.wpidx + 1, len(vs.wpts) - 1)][0])
+                prog = min(1.0, dist_cur / max(dist_seg, 0.01))
+                target_spd = spd_cur + (spd_nxt - spd_cur) * prog
 
                 # ── Steering: 朝向目标路点 ──
                 dx = target.x - t.location.x
