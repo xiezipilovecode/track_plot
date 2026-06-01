@@ -1,8 +1,8 @@
-"""tp_replay 主入口（从历�?replay_main.py 迁移）�?
+"""tp_replay 主入口（从历史 replay_main.py 迁移）。
 
-设计目标�?
-- 入口尽量“薄”：只做 env 覆盖、日志初始化、CARLA world 设置保护，以及调�?ReplayEngine�?
-- 保持 import 时无副作用：auto_control_main.py 会延迟导入本模块�?
+设计目标：
+- 入口尽量“薄”：只做 env 覆盖、日志初始化、CARLA world 设置保护，以及调用 ReplayEngine。
+- 保持 import 时无副作用：auto_control_main.py 会延迟导入本模块。
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 
 def _run_stitch_simple(world, client, engine, settings) -> None:
-    """拼接轨迹回放——先单车验证环境�?""
+    """拼接轨迹回放——先单车验证环境。"""
 
     carla = require_carla()
     import json
@@ -47,7 +47,7 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
         engine.pending_tracks = []
     with open(stitch_json,"r",encoding="utf-8") as f: data=json.load(f)
     trajs=data.get("trajectories",data if isinstance(data,list) else [])
-    # 选一条车：高质量 + 单调 y（防 Z 字形轨迹导致运动混乱�?
+    # 选一条车：高质量 + 单调 y（防 Z 字形轨迹导致运动混乱）
     def _check_monotonic(tr,max_rev=3):
         nds=tr.get("nodes",[])
         return sum(1 for i in range(len(nds)-1) if nds[i+1]["y"]<nds[i]["y"])<=max_rev
@@ -82,7 +82,7 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
     wpts = []
     last_lane = "-2"
     for n in nodes:
-        cam_id = n.get("camera", "")
+        cam_id = n.get("camera_id", "")
         if cam_id == "INTERP":
             n_lane = last_lane
         elif clusters:
@@ -130,7 +130,7 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
     total_d=sum(s[0] for s in segs)
     _info(f"  DEBUG segs={len(segs)} total_d={total_d:.0f}m PLAYBACK={config.PLAYBACK_SPEED} dt={float(settings.fixed_delta_seconds)}")
     if total_d<0.5: _info(f"  WARN: total distance too small ({total_d:.2f}m)! Vehicle won't move.")
-    # ── 同步模式 tick + 调试轨迹�?──
+    # ── 同步模式 tick + 调试轨迹线 ──
     world.tick()
     prev_pt=None
     for pt,_,_ in wpts:
@@ -145,7 +145,7 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
     for off in [5,10,20] if actor is None else []:
         actor=world.try_spawn_actor(bp,carla.Transform(carla.Location(p0.x,p0.y+off,p0.z),carla.Rotation(yaw=yaw0)))
     if actor is None: _info("spawn fail"); return
-    actor.set_simulate_physics(False)  # 关键：禁用物理，纯瞬移驱动（匹配 engine kinematic 模式�?
+    actor.set_simulate_physics(False)  # 关键：禁用物理，纯瞬移驱动（匹配 engine kinematic 模式）
     _info(f"单车测试: {st['trajectory_id']} nodes={len(nodes)}")
     # 设置观众视角
     spec=world.get_spectator()
@@ -175,14 +175,14 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
         if actor.is_alive: actor.destroy()
 
 def _run_stitch_kinematic(world, client, engine, settings) -> None:
-    """拼接轨迹回放 —�?多车 PID 路点跟随自动驾驶�?
+    """拼接轨迹回放 —— 多车 PID 路点跟随自动驾驶。
 
-    每辆车独立计�?steering（朝向下一路点�? throttle/brake（匹配目标速度），
-    逐帧 apply_control 驱动，physics=True 保证自然悬挂/车轮效果�?
+    每辆车独立计算 steering（朝向下一路点）+ throttle/brake（匹配目标速度），
+    逐帧 apply_control 驱动，physics=True 保证自然悬挂/车轮效果。
     """
     carla = require_carla()
 
-    # ── 车型 �?CARLA 蓝图映射 ──
+    # ── 车型 → CARLA 蓝图映射 ──
     _VEHICLE_BP = {
         "car": "vehicle.tesla.model3",
         "truck": "vehicle.carlamotors.carlacola",
@@ -202,7 +202,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
 
     stitch_json = os.getenv("TP_STITCH_JSON_PATH") or config.STITCH_JSON_PATH
     if not stitch_json:
-        _info("错误：stitch_kinematic 模式需要设�?TP_STITCH_JSON_PATH")
+        _info("错误：stitch_kinematic 模式需要设置 TP_STITCH_JSON_PATH")
         return
 
     # ── Phase 1: 锚点 & 坐标变换 ──
@@ -234,13 +234,13 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
         if max_n and len(filtered) >= max_n: break
 
     if not filtered:
-        _info("错误：无符合条件的拼接轨�?); return
+        _info("错误：无符合条件的拼接轨迹"); return
     filtered.sort(key=lambda t: t["nodes"][0]["timestamp"])
     global_min_ts = filtered[0]["nodes"][0]["timestamp"] / 1000.0
     time_win = _get_float_from_env("TP_STITCH_MAX_START_S", 600.0)
     filtered = [t for t in filtered
                 if t["nodes"][0]["timestamp"] / 1000.0 - global_min_ts < time_win]
-    _info(f"加载 {len(filtered)} 条轨�?(Q>={min_q} cam>={min_c} window<={time_win}s)")
+    _info(f"加载 {len(filtered)} 条轨迹 (Q>={min_q} cam>={min_c} window<={time_win}s)")
 
     from .lane_align import cluster_x_to_lanes, assign_lane
 
@@ -249,16 +249,16 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
         lane_cnt = {"-1": 0, "-2": 0, "-3": 0}
         for t in filtered:
             n0 = t["nodes"][0]
-            lid = assign_lane(n0.get("x"), n0.get("camera", ""), clusters)
+            lid = assign_lane(n0.get("x"), n0.get("camera_id", ""), clusters)
             lane_cnt[lid] = lane_cnt.get(lid, 0) + 1
-        _info(f"x→车道分�? �?1:{lane_cnt['-1']} �?2:{lane_cnt['-2']} �?3:{lane_cnt['-3']} (共{len(filtered)}�?")
+        _info(f"x→车道分布: 左-1:{lane_cnt['-1']} 中-2:{lane_cnt['-2']} 右-3:{lane_cnt['-3']} (共{len(filtered)}条)")
     else:
-        _info("警告: clusters为空! 检查节点字�?")
+        _info("警告: clusters为空! 检查节点字段:")
         for t in filtered[:1]:
             for j, n in enumerate(t["nodes"][:3]):
-                _info(f"  node[{j}] keys={list(n.keys())} x={n.get('x')} cam_id={n.get('camera','?')}")
+                _info(f"  node[{j}] keys={list(n.keys())} x={n.get('x')} cam_id={n.get('camera_id','?')}")
     if clusters:
-        _info(f"x→车道聚类完�? {len(clusters)} 个摄像头")
+        _info(f"x→车道聚类完成: {len(clusters)} 个摄像头")
 
     # ── Phase 3: 构建每车路点 ──
     class _VS:
@@ -270,17 +270,17 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             self.vtype = vtype; self._phys_off = True
 
     def _nav_to_lane(base_wp, target_lane_id: str):
-        """�?CARLA 道路网络中从 base_wp 导航到目标车道，返回对应 waypoint�?""
+        """在 CARLA 道路网络中从 base_wp 导航到目标车道，返回对应 waypoint。"""
         try:
             cur = int(base_wp.lane_id)
             tgt = int(target_lane_id)
             wp = base_wp
-            while cur < tgt:  # 向右�?
+            while cur < tgt:  # 向右走
                 nxt = wp.get_right_lane()
                 if nxt and nxt.lane_type == carla.LaneType.Driving:
                     wp = nxt; cur += 1
                 else: break
-            while cur > tgt:  # 向左�?
+            while cur > tgt:  # 向左走
                 nxt = wp.get_left_lane()
                 if nxt and nxt.lane_type == carla.LaneType.Driving:
                     wp = nxt; cur -= 1
@@ -297,7 +297,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
         wpts = []
         last_lane = "-2"
         for n in nodes:
-            cam_id = n.get("camera", "")
+            cam_id = n.get("camera_id", "")
             if cam_id == "INTERP":
                 n_lane = last_lane
             elif clusters:
@@ -307,7 +307,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             else:
                 n_lane = None
 
-            # 原坐标变�?�?rough_loc
+            # 原坐标变换 → rough_loc
             y_n = n["y"]
             x_n = n.get("x") or ds[0]
             rx = (x_n - ds[0]) * sc
@@ -316,7 +316,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
             rough_loc = carla.Location(rough_x, rough_y, engine.entry_loc.z)
 
-            # 投影到道路——失败则跳过该节�?
+            # 投影到道路——失败则跳过该节点
             try:
                 base_wp = engine.map.get_waypoint(rough_loc, project_to_road=True,
                                                    lane_type=carla.LaneType.Driving)
@@ -324,7 +324,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 base_wp = None
             if base_wp is None:
                 continue  # 不在道路上，跳过
-            # 投影距离太大 �?吸附到远处无关路�?�?丢弃
+            # 投影距离太大 → 吸附到远处无关路点 → 丢弃
             snap_dist = rough_loc.distance(base_wp.transform.location)
             if snap_dist > 20.0:
                 if len(states) < 3 and len(wpts) == 0:
@@ -343,41 +343,41 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
 
         if len(wpts) < 2:
             if len(states) < 3:
-                _info(f"  丢弃 {t['trajectory_id']}: {len(nodes)}节点 �?{len(wpts)}wpt (不足2�?")
+                _info(f"  丢弃 {t['trajectory_id']}: {len(nodes)}节点 → {len(wpts)}wpt (不足2个)")
             continue
-        # 诊断�?条轨�?
+        # 诊断前3条轨迹
         if len(states) < 3:
-            _info(f"  {t['trajectory_id']}: {len(nodes)}节点→{len(wpts)}wpt 车道={clusters and assign_lane(nodes[0].get('x'),nodes[0].get('camera',''),clusters) or '?'}")
+            _info(f"  {t['trajectory_id']}: {len(nodes)}节点→{len(wpts)}wpt 车道={clusters and assign_lane(nodes[0].get('x'),nodes[0].get('camera_id',''),clusters) or '?'}")
             _info(f"    entry_loc=({engine.entry_loc.x:.0f},{engine.entry_loc.y:.0f},{engine.entry_loc.z:.1f}) map_angle={engine.map_angle:.1f}")
             _info(f"    ds=({ds[0]:.1f},{ds[1]:.1f}) ca={ca:.4f} sa={sa:.4f}")
-            # 显示�?个原始节点和变换后的rough_loc
+            # 显示前3个原始节点和变换后的rough_loc
             for j in range(min(3, len(nodes))):
                 nn = nodes[j]
                 y_n = nn["y"]; x_n = nn.get("x") or ds[0]
                 rx = (x_n - ds[0]) * sc; ry = (y_n - ds[1]) * sc * sy
                 rx_loc = rx * ca - ry * sa + engine.entry_loc.x + ox
                 ry_loc = rx * sa + ry * ca + engine.entry_loc.y + oy
-                _info(f"    node[{j}]: raw({x_n:.0f},{y_n:.0f}) �?({rx:.2f},{ry:.2f})m �?CARLA({rx_loc:.0f},{ry_loc:.0f})")
+                _info(f"    node[{j}]: raw({x_n:.0f},{y_n:.0f}) → ({rx:.2f},{ry:.2f})m → CARLA({rx_loc:.0f},{ry_loc:.0f})")
             for j in range(min(3, len(wpts))):
                 loc = wpts[j][0]
                 d = loc.distance(engine.entry_loc)
                 _info(f"    wpt[{j}]=({loc.x:.0f},{loc.y:.0f},{loc.z:.1f}) dist_entry={d:.0f}m")
         if len(wpts) < 2: continue
-        # 沿路点链推进至少 MIN_D 米后�?spawn
+        # 沿路点链推进至少 MIN_D 米后才 spawn
         MIN_D = _get_float_from_env("TP_SPAWN_MIN_ENTRY_DIST_M", 30.0)
         cumul = 0.0; si = 0
         for i in range(len(wpts) - 1):
             cumul += wpts[i][0].distance(wpts[i + 1][0])
             if cumul >= MIN_D: si = i + 1; break
         if si > 0:
-            if len(states) < 3: _info(f"    跳过前{si}个路�?(累计{cumul:.0f}m)")
+            if len(states) < 3: _info(f"    跳过前{si}个路点 (累计{cumul:.0f}m)")
             wpts = wpts[si:]
         if len(wpts) < 2: continue
         states.append(_VS(t["trajectory_id"], wpts, stime, t.get("vehicle_type", "car")))
 
     states.sort(key=lambda s: s.stime)
     max_active = _get_int_from_env("TP_STITCH_TM_MAX_ACTIVE", int(config.STITCH_TM_MAX_ACTIVE))
-    _info(f"准备回放: {len(states)} 条轨�?max_active={max_active}")
+    _info(f"准备回放: {len(states)} 条轨迹 max_active={max_active}")
 
     # ── PID 参数 ──
     KP_STEER = _get_float_from_env("TP_PID_STEER_KP", 2.0)
@@ -385,7 +385,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
     KP_BRAKE = _get_float_from_env("TP_PID_SPEED_BRAKE_KP", 0.1)
     WP_THRESHOLD = _get_float_from_env("TP_PID_WAYPOINT_THRESHOLD_M", 4.0)
 
-    # ── Phase 4: 主循�?──
+    # ── Phase 4: 主循环 ──
     spawn_q = list(states)
     active = []
     sim_time = 0.0
@@ -415,15 +415,15 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                         carla.Transform(carla.Location(p0.x, p0.y + off, p0.z), carla.Rotation(yaw=yaw0)))
                 if actor is None:
                     spawn_fail += 1; vs.done = True; continue
-                # 先禁用物理，精确放置�?spawn 位置，避免首帧下�?
+                # 先禁用物理，精确放置到 spawn 位置，避免首帧下落
                 actor.set_simulate_physics(False)
                 actor.set_transform(carla.Transform(carla.Location(p0.x, p0.y, p0.z + 0.5), carla.Rotation(yaw=yaw0)))
-                try: actor.set_collision_enabled(False)  # 禁用车辆间碰�?
+                try: actor.set_collision_enabled(False)  # 禁用车辆间碰撞
                 except Exception: pass
                 vs.actor = actor
                 active.append(vs); spawned += 1
 
-            # ── 推进所有活跃车�?──
+            # ── 推进所有活跃车辆 ──
             for vs in list(active):
                 if vs.done: continue
                 # 首帧：启用物理（spawn 时先禁用防掉落）
@@ -441,7 +441,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                     else:
                         break
 
-                # 到最后路�?�?完成
+                # 到最后路点 → 完成
                 if vs.wpidx >= len(vs.wpts) - 1:
                     if t.location.distance(vs.wpts[-1][0]) < WP_THRESHOLD:
                         vs.done = True
@@ -449,7 +449,7 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                         continue
 
                 target = vs.wpts[vs.wpidx][0]
-                # 速度线性插值：当前路点速度 �?下个路点速度，按距离进度混合
+                # 速度线性插值：当前路点速度 → 下个路点速度，按距离进度混合
                 spd_cur = max(5.0, vs.wpts[vs.wpidx][1]) / 3.6
                 spd_nxt = max(5.0, vs.wpts[min(vs.wpidx + 1, len(vs.wpts) - 1)][1]) / 3.6
                 dist_cur = t.location.distance(vs.wpts[vs.wpidx][0])
@@ -491,19 +491,19 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
 
 
 def _run_stitch_autopilot(world, client, engine, settings) -> None:
-    """TM 自动驾驶模式：拼接轨�?�?TM 自动驾驶回放�?""
+    """TM 自动驾驶模式：拼接轨迹 → TM 自动驾驶回放。"""
     from .stitch_adapter import StitchAdapter
     from .stitch_autopilot import StitchAutopilot
 
     stitch_json = os.getenv("TP_STITCH_JSON_PATH") or config.STITCH_JSON_PATH
     if not stitch_json:
-        _info("错误：stitch_autopilot 模式需要设�?TP_STITCH_JSON_PATH")
+        _info("错误：stitch_autopilot 模式需要设置 TP_STITCH_JSON_PATH")
         return
 
     # Phase 1: 运行 process_data 获取坐标变换参数
     anchor_file = config.DATA_FILE_PATH
     if not anchor_file or not os.path.exists(anchor_file):
-        _info(f"警告：锚点文件不存在 {anchor_file}，使用默认变�?)
+        _info(f"警告：锚点文件不存在 {anchor_file}，使用默认变换")
     else:
         engine.process_data(anchor_file)
         engine.pending_tracks = []
@@ -520,14 +520,14 @@ def _run_stitch_autopilot(world, client, engine, settings) -> None:
         _info("错误：未加载到有效的拼接轨迹")
         return
 
-    # 过滤：只保留�?N 秒内开始的轨迹（避�?11 天跨度导致车辆永不生成）
+    # 过滤：只保留前 N 秒内开始的轨迹（避免 11 天跨度导致车辆永不生成）
     max_start_s = _get_float_from_env("TP_STITCH_MAX_START_S", 600.0)
     stitch_tracks = sorted(stitch_tracks, key=lambda t: t.start_time)
     earliest = stitch_tracks[0].start_time if stitch_tracks else 0.0
     stitch_tracks = [t for t in stitch_tracks if t.start_time - earliest < max_start_s]
     _info(f"Time-filtered to {len(stitch_tracks)} tracks (first {max_start_s}s window)")
 
-    # Phase 3: 创建 autopilot 编排�?
+    # Phase 3: 创建 autopilot 编排器
     autopilot = StitchAutopilot(world, client, engine)
     autopilot.load(stitch_tracks)
 
@@ -535,7 +535,7 @@ def _run_stitch_autopilot(world, client, engine, settings) -> None:
     _info(f"Stitch-Autopilot: {len(stitch_tracks)} trajectories | "
           f"TM active={autopilot._spawned_total} max={config.STITCH_TM_MAX_ACTIVE}")
 
-    # Phase 4: 主循�?
+    # Phase 4: 主循环
     fixed_dt = float(settings.fixed_delta_seconds)
     tick_idx = 0
 
@@ -543,7 +543,7 @@ def _run_stitch_autopilot(world, client, engine, settings) -> None:
         world.tick()
         active_cnt = autopilot.tick(fixed_dt)
         tick_idx += 1
-        s = autopilot.stats  # 确保 s 在每次迭代都定义（避免条件块内赋值导致未定义�?
+        s = autopilot.stats  # 确保 s 在每次迭代都定义（避免条件块内赋值导致未定义）
 
         if tick_idx % max(1, int(config.PRINT_EVERY_N_TICKS)) == 0:
             print(
@@ -847,7 +847,7 @@ def _maybe_apply_weather_override(world) -> None:
 def main() -> None:
     """Run CARLA replay."""
 
-    # Windows 控制台经常是 GBK：尽量让输出�?UTF-8，减少乱�?
+    # Windows 控制台经常是 GBK：尽量让输出用 UTF-8，减少乱码
     engine = None
 
     try:
@@ -962,12 +962,12 @@ def main() -> None:
 
         engine = ReplayEngine(client, config.XODR_PATH)
 
-        # ── 清理所有残留车�?──
+        # ── 清理所有残留车辆 ──
         for actor in list(world.get_actors().filter("vehicle.*")):
             try: actor.destroy()
             except: pass
 
-        # —�?拼接轨迹回放模式 —�?
+        # —— 拼接轨迹回放模式 ——
         replay_mode = _get_str_from_env("TP_REPLAY_MODE", "kinematic").strip().lower()
         if replay_mode == "stitch_simple":
             _run_stitch_simple(world, client, engine, settings)
@@ -987,7 +987,7 @@ def main() -> None:
         _try_set_spectator_view(world, engine)
 
         mode_label = os.getenv("TP_REPLAY_CONTROL_MODE") or config.REPLAY_CONTROL_MODE
-        _info(f"开始回�?(mode={mode_label})...")
+        _info(f"开始回放 (mode={mode_label})...")
 
         tick_idx = 0
         fixed_dt = float(settings.fixed_delta_seconds)
