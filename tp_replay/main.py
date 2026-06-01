@@ -45,19 +45,6 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
     if anchor_file and os.path.exists(anchor_file):
         engine.process_data(anchor_file)
         engine.pending_tracks = []
-    # ── 车道路径初始化 ──
-    from .lane_align import load_lane_paths, cluster_x_to_lanes, assign_lane, find_closest_lane_point
-    try:
-        lane_paths = load_lane_paths(config.XODR_PATH)
-        _info(f"车道路径加载成功: -1: {len(lane_paths.get('-1',[]))}, -2: {len(lane_paths.get('-2',[]))}, -3: {len(lane_paths.get('-3',[]))} 点/车道")
-        for lid in ("-1","-2","-3"):
-            lp = lane_paths.get(lid, [])
-            if lp:
-                ys = [p[1] for p in lp]
-                _info(f"  车道{lid}: Y范围 [{min(ys):.0f}, {max(ys):.0f}] 入口Y={engine.entry_loc.y:.0f}")
-    except Exception as e:
-        _info(f"警告：车道路径加载失败 ({e})，回退原方案")
-        lane_paths = None
     with open(stitch_json,"r",encoding="utf-8") as f: data=json.load(f)
     trajs=data.get("trajectories",data if isinstance(data,list) else [])
     # 选一条车：高质量 + 单调 y（防 Z 字形轨迹导致运动混乱）
@@ -70,53 +57,59 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
     st=cand[min(nth-1,len(cand)-1)] if cand else None
     if not st: return
     nodes=st["nodes"]
-    clusters = cluster_x_to_lanes([st]) if lane_paths else {}
+    from .lane_align import cluster_x_to_lanes, assign_lane
+    clusters = cluster_x_to_lanes([st])
     # 坐标变换参数防护
     if not hasattr(engine,'_stitch_cos_a') or engine._stitch_cos_a is None:
         _info("错误: engine 未初始化坐标变换参数，请设置 TP_DATA_FILE_PATH 指向锚点文件"); return
     ca=engine._stitch_cos_a; sa=engine._stitch_sin_a; ox=engine._stitch_off_x; oy=engine._stitch_off_y; ds=engine._data_start_point
     sc=float(config.DATA_SCALE); sy=float(config.SCALE_Y)
-    # ── 路点构建（车道对齐优先，回退原始坐标变换） ──
+    # ── 路点构建（CARLA waypoint 网络导航到目标车道）──
+    def _nav_lane(base_wp, target_id):
+        try:
+            cur = int(base_wp.lane_id); tgt = int(target_id); wp = base_wp
+            while cur < tgt:
+                nxt = wp.get_right_lane()
+                if nxt and nxt.lane_type == carla.LaneType.Driving: wp = nxt; cur += 1
+                else: break
+            while cur > tgt:
+                nxt = wp.get_left_lane()
+                if nxt and nxt.lane_type == carla.LaneType.Driving: wp = nxt; cur -= 1
+                else: break
+            return wp
+        except Exception: return base_wp
+
     wpts = []
     last_lane = "-2"
     for n in nodes:
         cam_id = n.get("camera_id", "")
         if cam_id == "INTERP":
             n_lane = last_lane
-        elif lane_paths and clusters:
+        elif clusters:
             x_val = n.get("x")
             n_lane = assign_lane(x_val, cam_id, clusters) if x_val is not None else last_lane
             last_lane = n_lane
         else:
             n_lane = None
 
-        if n_lane is not None and lane_paths:
-            lp = lane_paths.get(n_lane, [])
-            if lp:
-                rx = (float(n.get("x") or ds[0]) - ds[0]) * sc
-                ry = (float(n.get("y", 0)) - ds[1]) * sc * sy
-                rough_x = rx * ca - ry * sa + engine.entry_loc.x + ox
-                rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
-                px, py, pz, _ = find_closest_lane_point(rough_y, lp)
-                lane_dist = math.hypot(px - rough_x, py - rough_y)
-                if lane_dist > 30.0:
-                    n_lane = None
+        y_n = n["y"]; x_n = n.get("x") or ds[0]
+        rx = (x_n - ds[0]) * sc; ry = (y_n - ds[1]) * sc * sy
+        rough_x = rx * ca - ry * sa + engine.entry_loc.x + ox
+        rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
+        rough_loc = carla.Location(rough_x, rough_y, engine.entry_loc.z)
+
+        if n_lane is not None and clusters:
+            try:
+                base_wp = engine.map.get_waypoint(rough_loc, project_to_road=True,
+                                                   lane_type=carla.LaneType.Driving)
+                if base_wp:
+                    loc = _nav_lane(base_wp, n_lane).transform.location
                 else:
-                    loc = carla.Location(px, py, pz)
-            else:
-                loc = carla.Location(engine.entry_loc.x, engine.entry_loc.y, engine.entry_loc.z)
-        if n_lane is not None and lane_paths:
-            pass
-        elif n_lane is None:
-            y_n = n["y"]
-            x_n = n.get("x") or ds[0]
-            rx = (x_n - ds[0]) * sc
-            ry = (y_n - ds[1]) * sc * sy
-            loc = carla.Location(
-                rx * ca - ry * sa + engine.entry_loc.x + ox,
-                rx * sa + ry * ca + engine.entry_loc.y + oy,
-                engine.entry_loc.z,
-            )
+                    loc = rough_loc
+            except Exception:
+                loc = rough_loc
+        else:
+            loc = rough_loc
             try:
                 wp = engine.map.get_waypoint(loc, project_to_road=True,
                                               lane_type=carla.LaneType.Driving)
@@ -206,22 +199,6 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             bp = w.get_blueprint_library().filter("vehicle.*")[0]
         return bp
 
-    # ── 车道路径初始化 ──
-    from .lane_align import load_lane_paths, cluster_x_to_lanes, assign_lane, find_closest_lane_point
-
-    try:
-        lane_paths = load_lane_paths(config.XODR_PATH)
-        _info(f"车道路径加载成功: -1: {len(lane_paths.get('-1',[]))}, -2: {len(lane_paths.get('-2',[]))}, -3: {len(lane_paths.get('-3',[]))} 点/车道")
-        # 诊断：各车道Y范围
-        for lid in ("-1","-2","-3"):
-            lp = lane_paths.get(lid, [])
-            if lp:
-                ys = [p[1] for p in lp]
-                _info(f"  车道{lid}: Y范围 [{min(ys):.0f}, {max(ys):.0f}] 入口Y={engine.entry_loc.y:.0f}")
-    except Exception as e:
-        _info(f"警告：车道路径加载失败 ({e})，回退原方案")
-        lane_paths = None
-
     stitch_json = os.getenv("TP_STITCH_JSON_PATH") or config.STITCH_JSON_PATH
     if not stitch_json:
         _info("错误：stitch_kinematic 模式需要设置 TP_STITCH_JSON_PATH")
@@ -264,7 +241,9 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 if t["nodes"][0]["timestamp"] / 1000.0 - global_min_ts < time_win]
     _info(f"加载 {len(filtered)} 条轨迹 (Q>={min_q} cam>={min_c} window<={time_win}s)")
 
-    clusters = cluster_x_to_lanes(filtered) if lane_paths else {}
+    from .lane_align import cluster_x_to_lanes, assign_lane
+
+    clusters = cluster_x_to_lanes(filtered)
     if clusters:
         _info(f"x→车道聚类完成: {len(clusters)} 个摄像头")
 
@@ -277,6 +256,26 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             self.stime = stime; self.done = False
             self.vtype = vtype
 
+    def _nav_to_lane(base_wp, target_lane_id: str):
+        """在 CARLA 道路网络中从 base_wp 导航到目标车道，返回对应 waypoint。"""
+        try:
+            cur = int(base_wp.lane_id)
+            tgt = int(target_lane_id)
+            wp = base_wp
+            while cur < tgt:  # 向右走
+                nxt = wp.get_right_lane()
+                if nxt and nxt.lane_type == carla.LaneType.Driving:
+                    wp = nxt; cur += 1
+                else: break
+            while cur > tgt:  # 向左走
+                nxt = wp.get_left_lane()
+                if nxt and nxt.lane_type == carla.LaneType.Driving:
+                    wp = nxt; cur -= 1
+                else: break
+            return wp
+        except Exception:
+            return base_wp
+
     states = []
     for t in filtered:
         nodes = t["nodes"]
@@ -288,43 +287,37 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
             cam_id = n.get("camera_id", "")
             if cam_id == "INTERP":
                 n_lane = last_lane
-            elif lane_paths and clusters:
+            elif clusters:
                 x_val = n.get("x")
                 n_lane = assign_lane(x_val, cam_id, clusters) if x_val is not None else last_lane
                 last_lane = n_lane
             else:
                 n_lane = None
 
-            if n_lane is not None and lane_paths:
-                lp = lane_paths.get(n_lane, [])
-                if lp:
-                    rx = (float(n.get("x") or ds[0]) - ds[0]) * sc
-                    ry = (float(n.get("y", 0)) - ds[1]) * sc * sy
-                    rough_x = rx * ca - ry * sa + engine.entry_loc.x + ox
-                    rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
-                    px, py, pz, _ = find_closest_lane_point(rough_y, lp)
-                    # 安全检查：车道点距离 rough 位置 > 30m 说明越界，回退原方案
-                    lane_dist = math.hypot(px - rough_x, py - rough_y)
-                    if lane_dist > 30.0:
-                        _info(f"  警告: 车道路径越界 rough=({rough_x:.0f},{rough_y:.0f}) lane=({px:.0f},{py:.0f}) dist={lane_dist:.0f}m，回退原变换")
-                        n_lane = None
+            # 原坐标变换 → rough_loc（始终正确的基础位置）
+            y_n = n["y"]
+            x_n = n.get("x") or ds[0]
+            rx = (x_n - ds[0]) * sc
+            ry = (y_n - ds[1]) * sc * sy
+            rough_x = rx * ca - ry * sa + engine.entry_loc.x + ox
+            rough_y = rx * sa + ry * ca + engine.entry_loc.y + oy
+            rough_loc = carla.Location(rough_x, rough_y, engine.entry_loc.z)
+
+            if n_lane is not None and clusters:
+                # CARLA waypoint 网络导航到目标车道
+                try:
+                    base_wp = engine.map.get_waypoint(rough_loc, project_to_road=True,
+                                                       lane_type=carla.LaneType.Driving)
+                    if base_wp:
+                        target_wp = _nav_to_lane(base_wp, n_lane)
+                        loc = target_wp.transform.location
                     else:
-                        loc = carla.Location(px, py, pz)
-                else:
-                    loc = carla.Location(engine.entry_loc.x, engine.entry_loc.y, engine.entry_loc.z)
-            if n_lane is not None and lane_paths:
-                pass  # 已在上面设置 loc
-            elif n_lane is None:
-                # 回退：原坐标变换
-                y_n = n["y"]
-                x_n = n.get("x") or ds[0]
-                rx = (x_n - ds[0]) * sc
-                ry = (y_n - ds[1]) * sc * sy
-                loc = carla.Location(
-                    rx * ca - ry * sa + engine.entry_loc.x + ox,
-                    rx * sa + ry * ca + engine.entry_loc.y + oy,
-                    engine.entry_loc.z,
-                )
+                        loc = rough_loc
+                except Exception:
+                    loc = rough_loc
+            else:
+                # 无车道信息：原路点投影
+                loc = rough_loc
                 try:
                     wp = engine.map.get_waypoint(loc, project_to_road=True,
                                                   lane_type=carla.LaneType.Driving)
