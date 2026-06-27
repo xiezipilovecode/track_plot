@@ -17,6 +17,7 @@ trace_data/stitched/
 
 # Stitch output JSON (太大，不适合 Git)
 trace_data/track_stitch/output/stitched_trajectories.json
+tp_tunnel_traffic.zip
 
 # AI Agent
 .sisyphus/
