@@ -67,7 +67,8 @@ def _run_stitch_simple(world, client, engine, settings) -> None:
                 if not buf or buf[0] == ']': break
                 try:
                     obj, end = decoder.raw_decode(buf)
-                    yield obj
+                    if isinstance(obj, dict):
+                        yield obj
                     buf = buf[end:]
                 except json.JSONDecodeError:
                     chunk = fh.read(65536)
@@ -274,7 +275,8 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 if not buf or buf[0] == ']': break
                 try:
                     obj, end = decoder.raw_decode(buf)
-                    yield obj
+                    if isinstance(obj, dict):
+                        yield obj
                     buf = buf[end:]
                 except json.JSONDecodeError:
                     chunk = fh.read(65536)
@@ -294,7 +296,8 @@ def _run_stitch_kinematic(world, client, engine, settings) -> None:
                 if not buf or buf[0] == ']': break
                 try:
                     obj, end = decoder.raw_decode(buf)
-                    yield obj
+                    if isinstance(obj, dict):
+                        yield obj
                     buf = buf[end:]
                 except json.JSONDecodeError:
                     chunk = fh.read(65536)

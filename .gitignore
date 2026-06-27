@@ -15,6 +15,9 @@ run_logs/
 plot_data/
 trace_data/stitched/
 
+# Stitch output JSON (太大，不适合 Git)
+trace_data/track_stitch/output/stitched_trajectories.json
+
 # AI Agent
 .sisyphus/
 .claude/
@@ -52,3 +55,6 @@ tp_tunnel_traffic/docs/diagram_cross_domain.png
 tp_tunnel_traffic/docs/draw_diagram.py
 tp_tunnel_traffic/docs/holo_cross_domain_v4.pptx
 tp_tunnel_traffic/docs/make_ppt.js
+
+# 课程作业 LaTeX 工作区 (本地使用, 不入库)
+tp_tunnel_traffic/docs/Networked_MC/
